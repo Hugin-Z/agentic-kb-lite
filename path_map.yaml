@@ -1,0 +1,74 @@
+# path_map.yaml — knowledge-base 试用版配置模板
+#
+# 由 scripts/ingest.py 读取。试用前按以下步骤填写:
+#   1. 取消下方 path_mappings 中需要用的占位条目的注释(去掉行首 #)
+#   2. source 改为你本机要 ingest 的项目目录绝对路径
+#   3. target 改为对应 corpus 二级目录(场景代号 + 项目名)
+#
+# 维护方法:
+#   - 每次 ingest 新目录时若报 ERROR_NO_MAPPING,在 path_mappings 加一条
+#   - 每次 ingest 遇到新扩展名报 ERROR_NO_PREFIX,在 prefix_rules 加一组
+#   - 跨项目参考素材用 --prefix-override 参考- 命令行覆盖,不需要改本文件
+#   - 修改本文件不需要重启任何东西,ingest.py 每次跑都重新读
+
+# === path_mappings ===
+# 源路径前缀 → corpus 目标二级目录(相对 corpus/)
+# 匹配规则:取与源文件绝对路径最长前缀匹配的一条;前缀比较时统一为 / 分隔
+# Windows 路径在 yaml 里写 / 或 \\ 都行,ingest.py 内部统一为 /
+path_mappings:
+  # --- 占位 1:历史方案 ---
+  # - source: "C:/你的项目根目录/某历史项目"
+  #   target: "01-历史方案/某历史项目"
+
+  # --- 占位 2:投标章节 ---
+  # - source: "C:/你的项目根目录/某投标项目"
+  #   target: "02-投标章节/某投标项目"
+
+  # --- 占位 3:技术决策 ---
+  # - source: "C:/你的项目根目录/某技术调研"
+  #   target: "03-技术决策/某技术调研"
+
+  # --- 占位 4:个人记忆 ---
+  # - source: "C:/你的项目根目录/某专班纪要"
+  #   target: "04-个人记忆/某专班"
+
+# === prefix_rules ===
+# 按扩展名分组的 G14 前缀推断(见 tests/查询记录.md G14)
+# 每组可有 keywords 列表(顺序匹配,正则 ignore-case)+ default 兜底
+# 命中第一个 keyword 的 pattern 即返回对应 prefix;全不中走 default
+prefix_rules:
+  ".html":
+    default: "原型-"
+    # 注:.html 99% 是原型文件;若未来出现 02 投标场景下纯文本 html,需加 章节- keyword
+
+  ".pdf":
+    keywords:
+      - { pattern: "纪要|会议|会谈|讨论", prefix: "纪要-" }
+      - { pattern: "调研|访谈|摸底", prefix: "调研-" }
+      - { pattern: "询比|挂网|招标书?|采购|评分", prefix: "招标-" }
+      - { pattern: "章节|技术部分|应答|偏离表|响应文件|技术方案", prefix: "章节-" }
+    default: "方案-"
+
+  ".docx":
+    keywords:
+      - { pattern: "纪要|会议|会谈|讨论|沟通", prefix: "纪要-" }
+      - { pattern: "询比|挂网|招标书?|采购|评分", prefix: "招标-" }
+      - { pattern: "章节|技术部分|应答|偏离表|响应文件|技术方案", prefix: "章节-" }
+      - { pattern: "调研|访谈|摸底", prefix: "调研-" }
+    default: "方案-"
+
+  ".doc":
+    keywords:
+      - { pattern: "纪要|会议", prefix: "纪要-" }
+    default: "方案-"
+
+  ".xlsx":
+    keywords:
+      - { pattern: "偏离表|应答表|响应文件", prefix: "章节-" }
+      - { pattern: "评分", prefix: "招标-" }
+    default: "方案-"
+
+  ".pptx":
+    keywords:
+      - { pattern: "纪要|汇报", prefix: "纪要-" }
+    default: "方案-"

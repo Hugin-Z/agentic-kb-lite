@@ -1,0 +1,31 @@
+# 现有(保留)
+logs/
+.venv/
+__pycache__/
+*.pyc
+
+# 派生临时数据(v0.3-v0.6)
+*.assets/
+*.frames/
+
+# v0.5 增量 ingest 日志(同 logs/ 但显式覆盖)
+ingest_log.jsonl
+
+# 工具二进制 — tools/rg.exe 强制纳入仓库(开源前最终修复 P0-2,选项 A)
+# 不在此处忽略 tools/rg.exe;详见 tools/README.md(来源 + 版本 + MIT 协议声明)
+
+# 用户私有素材(本地保留,永不 push)
+tests/*.pptx
+tests/*.real.*
+tests/GBT35958*.pdf
+
+# fixture PDF 防误提交(开源前最终修复 P0-3)
+corpus/.fixtures/**/*.pdf
+
+# OS / IDE
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+*~
