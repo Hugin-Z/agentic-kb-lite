@@ -1,6 +1,6 @@
-# 轻量知识库(knowledge-ripgrep+LLM)
+# 轻量知识库(agentic-kb-lite)
 
-> 基于 ripgrep + LLM 的轻量个人/部门知识库,不向量化、不切分、不预处理。
+> 基于 ripgrep + LLM 的轻量个人/部门知识库:不做语义向量化索引,不做侵入式重组;只做轻量格式转换(markitdown)和元数据卡片(.stub.md / .vision.md)。
 > English version: [README.en.md](./README.en.md) · License: [MIT](./LICENSE)
 
 ---
@@ -19,7 +19,7 @@
 - **唯一外部模型依赖是 AI 编程助手内置 LLM**(以 Claude Code 为例,即其内置 Claude 模型),不调外部 API、不本地部署模型权重
 - **唯一外部工具依赖是 ripgrep + 可选 ffmpeg + 可选 poppler**(后两者只在多模态场景需要)
 - 检索靠 ripgrep + LLM 多轮 agent loop;视觉转写靠 AI 编程助手内置的 vision 能力直接读图
-- 不向量化、不切分、不预处理 — 素材进 corpus 时**怎么放就怎么存**
+- **不做语义向量化索引,不做切分,不做侵入式重组**;轻量格式转换(markitdown 把 docx/pptx/pdf 转 markdown)+ 元数据卡片(`.stub.md` / `.vision.md`)让 LLM 能直接读
 
 ## 2. 核心特性
 
@@ -42,7 +42,7 @@
 ```text
 ┌──────────────────────────────────────────────────────────────────┐
 │                                                                  │
-│   1. git clone <repo>  &&  cd knowledge-ripgrep+LLM(...)         │
+│   1. git clone <repo>  &&  cd agentic-kb-lite                   │
 │                              │                                   │
 │                              ▼                                   │
 │   2. install.bat / manual    (Windows 双击;mac/Linux 手动 venv) │
@@ -79,7 +79,7 @@
 
 ```powershell
 git clone <repo-url>
-cd knowledge-ripgrep+LLM(...)
+cd agentic-kb-lite
 install.bat                  # 装 Python 依赖 + bundled rg.exe + smoke test(~3 分钟)
 setup_system_tools.bat       # 可选:检测 ffmpeg / poppler / 系统 rg
 ```
@@ -88,7 +88,7 @@ setup_system_tools.bat       # 可选:检测 ffmpeg / poppler / 系统 rg
 
 ```bash
 git clone <repo-url>
-cd "knowledge-ripgrep+LLM(...)"
+cd agentic-kb-lite
 
 # macOS / Linux 暂不支持一键安装,需手动安装 Python venv + 依赖:
 python3 -m venv .venv
@@ -122,6 +122,30 @@ path_mappings:
 
 AI 会按 [CLAUDE.md](CLAUDE.md) 工作流跑 ingest(G14/G15/G16/G18 分流)+ agent loop 4 级降级检索 + 引用规范输出。
 
+**你大概会看到这样的输出**:
+
+````text
+[ingest dry-run]
+扫描 D:/我的项目资料 → 命中 42 个文件
+- 27 个 .md / .txt → G16 三件共存
+- 8 个 .docx → markitdown 转 .md + G14 命名规范
+- 5 个 .pptx → G18 图为主分流 + vision_pending: YES
+- 2 个 .pdf → markitdown 提取文本 + G16
+确认正式入库?(y/n)
+
+[查询:我以前的某个项目是怎么做架构的?]
+[轮 1] 检索词:["系统架构", "项目方案", "技术架构"]
+[L1] rg 命中 corpus/01-历史方案/某项目-2025/方案-XX.md (line 15-42)
+[L2] 文件名扫命中 corpus/01-历史方案/2024Q3-基础架构.md
+[整合] 基于 2 份正文证据:
+- 项目 A 采用 X 架构,核心是 ...(详见 corpus/01-历史方案/...:15-42)
+- 项目 B 用了 Y 模式,因为 ...(详见 corpus/01-历史方案/2024Q3-...)
+
+工具调用:2 次 / 12 上限。
+````
+
+输出格式由 AI 编程助手按 CLAUDE.md 状态段执行,具体细节随场景变化。
+
 > **架构边界说明**:`scripts/search.py` 是 ripgrep 的低层包装器,负责文件扫描。**完整 agent loop**(4 级降级 / 文件名扫描 / 轮间迭代 / 状态段判定 / 实质变化判定)**由 AI 编程助手(Claude Code / Codex 等)按 [CLAUDE.md](CLAUDE.md) 契约执行**,不是 `search.py` 内嵌的功能。`search.py` 不知道"轮次"概念,LLM 在每轮调用它做单次 ripgrep 扫描。
 
 ### 3.5 示例查询(脱敏行业举例)
@@ -138,7 +162,7 @@ AI 会按 [CLAUDE.md](CLAUDE.md) 工作流跑 ingest(G14/G15/G16/G18 分流)+ ag
 ## 4. 项目结构
 
 ```text
-knowledge-ripgrep+LLM(...)
+agentic-kb-lite/
 ├── README.md / README.en.md          # 本文档(中文 / 英文)
 ├── CLAUDE.md                         # AI 编程助手运行时契约(每次会话必读)
 ├── LICENSE                           # MIT
@@ -186,7 +210,9 @@ knowledge-ripgrep+LLM(...)
 │   └── 查询记录.md                   # 评估证据(E/V 系)+ 治理记录(R/G/J/F/P/W)
 │
 └── tools/
-    └── rg.exe                        # bundled ripgrep(Windows;.gitignore,setup 脚本检测)
+    ├── rg.exe                        # bundled ripgrep(Windows;v15.1.0,纳入仓库)
+    ├── README.md                     # rg.exe 来源 + 版本 + MIT 分发声明
+    └── LICENSE-ripgrep                # ripgrep 上游 MIT 原文(字节级一致)
 ```
 
 ## 5. 不在范围

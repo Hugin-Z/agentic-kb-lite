@@ -1,6 +1,6 @@
-# Lightweight Knowledge Base (knowledge-ripgrep+LLM)
+# Lightweight Knowledge Base (agentic-kb-lite)
 
-> A lightweight personal/team knowledge base built on ripgrep + LLM — no vectorization, no chunking, no preprocessing.
+> A lightweight personal/team knowledge base built on ripgrep + LLM: no semantic vector indexing, no intrusive restructuring; only lightweight format conversion (markitdown) and metadata cards (`.stub.md` / `.vision.md`).
 > 中文版本: [README.md](./README.md) · License: [MIT](./LICENSE)
 
 > **Terminology note**: this English version mirrors the Chinese authoritative source ([README.md](./README.md)) section-by-section. Domain terms (agent loop, vision, fixture, stub, ingest, four-level fallback, etc.) are kept in English throughout to avoid translation drift.
@@ -21,7 +21,7 @@ What makes this different:
 - **The only external model dependency is the LLM built into the AI coding assistant** (e.g., Claude inside Claude Code); no external API calls, no local model weights deployed
 - **The only external tool dependencies are ripgrep + optional ffmpeg + optional poppler** (the last two only for multimodal scenarios)
 - Retrieval uses ripgrep + an LLM-driven multi-round agent loop; visual transcription uses the AI coding assistant's built-in vision capability reading images directly
-- No vectorization, no chunking, no preprocessing — materials enter `corpus/` **as-is**
+- **No semantic vector indexing, no chunking, no intrusive restructuring**; lightweight format conversion (markitdown converts docx/pptx/pdf to markdown) + metadata cards (`.stub.md` / `.vision.md`) let the LLM read directly
 
 ## 2. Core features
 
@@ -44,7 +44,7 @@ This repo is designed to work with **AI coding assistants like Claude Code / Cod
 ```text
 ┌──────────────────────────────────────────────────────────────────┐
 │                                                                  │
-│   1. git clone <repo>  &&  cd knowledge-ripgrep+LLM(...)         │
+│   1. git clone <repo>  &&  cd agentic-kb-lite                    │
 │                              │                                   │
 │                              ▼                                   │
 │   2. install.bat / manual    (Win: dbl-click;mac/Linux: venv)   │
@@ -81,7 +81,7 @@ This repo is designed to work with **AI coding assistants like Claude Code / Cod
 
 ```powershell
 git clone <repo-url>
-cd knowledge-ripgrep+LLM(...)
+cd agentic-kb-lite
 install.bat                  # Python deps + bundled rg.exe + smoke test (~3 min)
 setup_system_tools.bat       # optional: detect ffmpeg / poppler / system rg
 ```
@@ -90,7 +90,7 @@ setup_system_tools.bat       # optional: detect ffmpeg / poppler / system rg
 
 ```bash
 git clone <repo-url>
-cd "knowledge-ripgrep+LLM(...)"
+cd agentic-kb-lite
 
 # macOS / Linux has no one-shot installer yet; install Python venv + deps manually:
 python3 -m venv .venv
@@ -125,6 +125,30 @@ Then:
 
 The AI will follow the [CLAUDE.md](CLAUDE.md) workflow: ingest with G14/G15/G16/G18 routing, then the 4-level agent-loop retrieval with proper citations.
 
+**You'll see output roughly like this**:
+
+````text
+[ingest dry-run]
+Scanning D:/my-project-materials → 42 files matched
+- 27 .md / .txt → G16 three-file coexistence
+- 8 .docx → markitdown → .md + G14 naming convention
+- 5 .pptx → G18 image-heavy routing + vision_pending: YES
+- 2 .pdf → markitdown text extraction + G16
+Proceed with actual ingest? (y/n)
+
+[Query: How did I design the architecture for a previous project?]
+[Round 1] Retrieval terms: ["system architecture", "project proposal", "technical architecture"]
+[L1] rg hits corpus/01-历史方案/some-project-2025/proposal-XX.md (line 15-42)
+[L2] filename scan hits corpus/01-历史方案/2024Q3-base-architecture.md
+[Synthesis] Based on 2 body-text evidence pieces:
+- Project A used X architecture, with core being ... (see corpus/01-历史方案/...:15-42)
+- Project B used Y pattern, because ... (see corpus/01-历史方案/2024Q3-...)
+
+Tool calls: 2 / 12 budget.
+````
+
+Output format is executed by the AI coding assistant per CLAUDE.md state-segment rules; specific details vary with the scenario.
+
 > **Architectural boundary**: `scripts/search.py` is a low-level wrapper around ripgrep — it does file scanning only. **The full agent loop** (4-level fallback / filename scan / cross-round iteration / state-segment judgment / substantive-change detection) **is executed by the AI coding assistant (Claude Code / Codex / etc.) following the [CLAUDE.md](CLAUDE.md) contract**, not embedded inside `search.py`. `search.py` has no notion of "rounds"; the LLM invokes it for single ripgrep scans per round.
 
 ### 3.5 Example queries (anonymized, industry-style)
@@ -141,7 +165,7 @@ Queries that suit this repo (substitute with your own domain / projects):
 ## 4. Project structure
 
 ```text
-knowledge-ripgrep+LLM(...)
+agentic-kb-lite/
 ├── README.md / README.en.md          # this doc (Chinese / English)
 ├── CLAUDE.md                         # AI coding assistant runtime contract (mandatory pre-read)
 ├── LICENSE                           # MIT
@@ -189,7 +213,9 @@ knowledge-ripgrep+LLM(...)
 │   └── 查询记录.md                   # evaluation evidence (E/V) + governance (R/G/J/F/P/W)
 │
 └── tools/
-    └── rg.exe                        # bundled ripgrep (Windows; .gitignored, setup script detects)
+    ├── rg.exe                        # bundled ripgrep (Windows; v15.1.0, tracked in repo)
+    ├── README.md                     # rg.exe source + version + MIT redistribution notice
+    └── LICENSE-ripgrep                # upstream ripgrep MIT (byte-faithful)
 ```
 
 ## 5. Out of scope
