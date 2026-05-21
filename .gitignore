@@ -4,6 +4,9 @@ logs/
 __pycache__/
 *.pyc
 
+# Claude Code 自身 working state(scheduled_tasks.lock 等);不入仓 — v0.2.2 C-3
+.claude/
+
 # 派生临时数据(v0.3-v0.6)
 *.assets/
 *.frames/
