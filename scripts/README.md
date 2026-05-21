@@ -1,15 +1,11 @@
 # scripts/
 
-> 本目录是检索 + ingest pipeline 的代码区,严格控量。
-
-> **v0.2 起 CLI 大变**:本文档下方多处描述基于 v0.1(`ingest.py <path>` 单命令 + `path_mappings` 规则匹配 + `search.py --scene`)。v0.2 范式切换:
+> 本目录是检索 + ingest pipeline 的代码区,严格控量。v0.2 范式切换:
 >
-> - **ingest** 拆 `python ingest.py scan-only <src>` + `execute-plan <plan>` 两步,AI 在对话层产 routing_plan.json(详见 [CLAUDE.md §6 PARA 路由协议](../CLAUDE.md#6-para-路由协议))
-> - **path_map.yaml** 退化为 `buckets` 语义 + `hint_subdir_keywords` + `explicit_mappings` 兜底,**`path_mappings` / `prefix_rules` 字段在 v0.2 已废弃**
-> - **search.py** `--scene 01/02/03/04` → `--scope projects/areas/resources/archives/all` + 新增 `--project <名>`
-> - **新增 `archive_check.py`** 归档候选扫描
->
-> 下方旧文档保留作历史参考,完整 v0.2 行为以 [CLAUDE.md](../CLAUDE.md) 为准。**v0.2.1 计划重写本 README**。
+> - **ingest** 拆 `python ingest.py scan-only <src>` + `execute-plan <plan>` 两步,AI 在对话层产 routing_plan.json(详见 [CLAUDE.md §6 PARA 路由协议](../CLAUDE.md))
+> - **path_map.yaml** 退化为 `buckets` 语义 + `hint_subdir_keywords` + `explicit_mappings` 兜底,**`path_mappings` / `prefix_rules` 字段已废弃**
+> - **search.py** `--scope projects/areas/resources/archives/all` + `--project <名>`
+> - **新增 `archive_check.py`** 归档候选扫描 + **`smoke_test.py`(v0.2.1)** 最小自动化测试
 
 **架构边界**:`search.py` 是 ripgrep 的低层包装器(单次扫描 / 文件 scope 过滤 / 正则模式开关),**不实现 agent loop**。完整 agent loop(4 级降级 / 文件名扫描 / 轮间迭代 / 状态段判定 / 实质变化判定)由 AI 编程助手(Claude Code / Codex 等)按 [CLAUDE.md](../CLAUDE.md) 契约在对话层执行,每轮调用 `search.py` 做一次 ripgrep。`search.py` 本身无"轮次"概念。
 
@@ -20,20 +16,23 @@
 ### 用法
 
 ```bash
-# 限定场景搜索(场景代号: 01/02/03/04/all)
-.venv\Scripts\python.exe scripts/search.py --scene 01 --terms "关键词1,关键词2"
+# 限定 PARA scope 搜索(v0.2 起 --scene → --scope;projects/areas/resources/archives/all)
+.venv\Scripts\python.exe scripts/search.py --scope projects --terms "关键词1,关键词2"
 
-# 跨场景搜索
-.venv\Scripts\python.exe scripts/search.py --scene all --terms "人名,主题词"
+# 跨 corpus 搜索(默认不含 archives;P+A+R)
+.venv\Scripts\python.exe scripts/search.py --scope all --terms "人名,主题词"
+
+# 限定到单个项目(v0.2 新增 --project,自动隐含 scope=projects)
+.venv\Scripts\python.exe scripts/search.py --project 智慧城市可视化平台 --terms "数据库选型"
 
 # 排除 stub,只搜正文(R1/R2 边界对比测试用)
-.venv\Scripts\python.exe scripts/search.py --scene 04 --terms "人名,主题词" --no-stub
+.venv\Scripts\python.exe scripts/search.py --scope resources --terms "人名,主题词" --no-stub
 
 # 自定 context / max-files
-.venv\Scripts\python.exe scripts/search.py --scene 01 --terms "告警" --context 10 --max-files 5
+.venv\Scripts\python.exe scripts/search.py --scope projects --terms "告警" --context 10 --max-files 5
 
 # 正则模式(默认 fixed-strings 字面匹配,正则需显式开)
-.venv\Scripts\python.exe scripts/search.py --scene 01 --terms "原型-V[0-9]+" --regex
+.venv\Scripts\python.exe scripts/search.py --scope projects --terms "原型-V[0-9]+" --regex
 ```
 
 **匹配模式**:默认走 `--fixed-strings` 字面匹配,**含正则特殊字符的检索词(括号 / 星号 / 方括号 / `+` / `?` / `.` 等)安全**——例如 `Kingbase(` / `CIM*` / `[CIM]` 都按字面查,不会触发 rg 正则错误。需要正则模式显式加 `--regex`;此模式下检索词若语法错误,rg 会报错停(returncode ≥ 2),search.py 会原样抛出 stderr 不再静默吞错。
@@ -142,92 +141,126 @@ search.py 输出 header 会显示当前命中:`(来源: bundled)` 或 `(来源: 
 
 ---
 
-## ingest.py 使用
+## ingest.py 使用(v0.2 拆 scan-only + execute-plan 两步)
 
 ### 用法
 
 ```bash
-# 单文件
-.venv\Scripts\python.exe scripts/ingest.py "C:\Users\xxx\工作目录\某项目\某文件.docx"
+# Step 1: 扫源目录 → routing_request.json(不做任何路由判断)
+.venv\Scripts\python.exe scripts/ingest.py scan-only "C:\Users\xxx\工作目录\某项目"
+# → 输出 logs/routing_request.json
 
-# 目录(递归所有文件)
-.venv\Scripts\python.exe scripts/ingest.py "C:\Users\xxx\工作目录\某项目"
+# Step 2(由 AI 编程助手在对话层做):
+#   Read logs/routing_request.json + path_map.yaml + CLAUDE.md §6 PARA 路由协议
+#   → 写出 logs/routing_plan.json(AI 判断每个文件落到 corpus 哪个 PARA bucket + 子目录)
 
-# 干跑(首次 ingest 一个新目录的标准做法)
-.venv\Scripts\python.exe scripts/ingest.py "C:\Users\xxx\工作目录\某项目" --dry-run
+# Step 3: 按 AI 给的 routing_plan.json 执行迁移 + frontmatter 注入
+.venv\Scripts\python.exe scripts/ingest.py execute-plan logs/routing_plan.json
+
+# 干跑(只看 plan 会做什么,不写盘)
+.venv\Scripts\python.exe scripts/ingest.py execute-plan logs/routing_plan.json --dry-run
 ```
 
-### 工作流(对应 G14-G18)
+**典型工作流**:用户对 Claude Code 说"把 D:/工作目录/某项目 入库",Claude Code 自动跑 scan-only → 产 routing_plan → 展示给用户过目 → 跑 execute-plan,一气呵成不打扰用户。详见 [CLAUDE.md §6 PARA 路由协议](../CLAUDE.md)。
+
+### 工作流(v0.2 G14-G18 沿用 v0.1,target 路径由 plan 外部给定)
 
 | 步骤 | 实现 | 报错停于此步? |
 |---|---|---|
-| 1. 查 path_map.yaml,最长前缀匹配源路径 → 得 corpus 目标二级目录 | `find_target_subdir()` | ✅ NO_MAPPING |
-| 2. 按扩展名查 prefix_rules → 得 G14 前缀(`方案-` / `原型-` / ...) | `infer_prefix()` | ✅ NO_PREFIX |
-| 3. 拼最终路径 = `corpus/<target>/<prefix><原文件名>` | — | — |
-| 4. 同名冲突:字节+mtime 一致跳过 / 不同报错停(走 G3-G9 人工判定) | `files_equal()` | ✅ VERSION_CONFLICT |
-| 5. binary(.docx/.doc/.xlsx/.pptx/.pdf):markitdown 转 md → 字符密度分流 G15(0)/G16(≥5%)/G18(<5%) | — | ✅ MARKITDOWN_FAILED |
-| 6. text(.html/.txt/.md/.json):直接 `shutil.copy2` 保留 mtime | — | — |
-| 7. 写一行 JSON 到 `logs/ingest_log.jsonl` | `log_action()` | — |
+| 0. 路径边界校验(v0.2.1 P0-2):bucket 白名单 + 拒 .. / 绝对路径 / 路径分隔符 | `_validate_plan_item_paths()` | ✅ ERROR_INVALID_PLAN_ITEM |
+| 1. 临时 / 锁 / 隐藏文件早期跳过 | `is_temp_or_hidden()` | — |
+| 2. v0.5 增量判定:同 src_abs + size + mtime → 跳过 | `is_already_ingested()` | — |
+| 3. target_dir 从 plan item 构造 + Path.resolve().relative_to(CORPUS) 二次校验 | `_build_target_dir()` | ✅ ValueError |
+| 4. 同名冲突:字节+mtime 一致跳过 / 不同报错停 | `files_equal()` | ✅ ERROR_TARGET_CONFLICT |
+| 5. G2 超大守门:> 50 MB 跳过 cp + 仅 stub | — | — |
+| 6. binary(.docx/.doc/.xlsx/.pptx/.pdf):markitdown 转 md → 字符密度分流 G15(0)/G16(≥5%)/G18(<5%);**v0.2 阶段 4 docx 还自动嵌入图三闸 + 嵌入表 python-docx 抽取** | — | ✅ ERROR_MARKITDOWN_FAILED |
+| 7. text(.html/.txt/.md/.json):`shutil.copy2` + 可选 frontmatter 注入 | — | — |
+| 8. 图像 / 视频:cp + vision-pending stub | — | — |
+| 9. vsdx:LibreOffice headless 转 PDF → 现有 binary 路径;不可用降级 stub | `process_vsdx_to_pdf()` | — |
+| 10. frontmatter 注入:type / date / project / tags 4 字段;resources 类 project=null | `inject_frontmatter()` | — |
+| 11. 写一行 JSON 到 `logs/ingest_log.jsonl` + 单独 `logs/ingest_executed_<ts>.jsonl` | `log_action()` | — |
 
-### path_map.yaml 维护方法
+### path_map.yaml 维护方法(v0.2 重新设计)
 
-文件位置:`<repo>/path_map.yaml`(项目根)。增量维护,每次 ingest 报错时增补一条:
+v0.2 起 path_map.yaml 不再是规则匹配表,**退化为语义说明 + hints + explicit_mappings 兜底**:
 
-**遇 ERROR_NO_MAPPING**:在 `path_mappings` 加一条
+- `buckets`:4 个 PARA 一级目录的语义描述(供 AI 参考)
+- `hint_subdir_keywords`:`resources_hint` / `areas_hint` / `archives_hint` 三类关键词,辅助 AI 判断
+- `project_subdirs`:projects 内部 5 固定子目录(`01-方案` 等)+ `99-其他`
+- `explicit_mappings`:**用户偏好覆盖**(默认空 list),AI 看到 source 路径匹配则跳过常规判断
+
+**通常不需要改 path_map.yaml** — AI 看子目录名一眼就能判断。**仅当 AI 路由不理想时**,在 `explicit_mappings` 加一条偏好兜底:
+
 ```yaml
-- source: "C:/Users/xxx/工作目录/某项目"  # 源绝对路径(/ 或 \\ 均可)
-  target: "01-历史方案/某项目"            # corpus 二级目录(场景 + 项目名)
+explicit_mappings:
+  - source: "C:/某客户合同包"
+    target: "02-areas/合同档案/"
+    reason: "目录虽含项目名,但内容是合同文档,归 areas 更合适"
 ```
 
-**遇 ERROR_NO_PREFIX**:在 `prefix_rules` 给该扩展名加 `default` 或 `keywords`
-```yaml
-".新扩展":
-  default: "方案-"
-```
-
-修改 yaml 后无需重启,ingest.py 每次跑都重新读。
-
-### 报错停的三种情形 + 处理
+### 报错停的几种情形 + 处理
 
 | 错误 | 含义 | 处理 |
 |---|---|---|
-| **ERROR_NO_MAPPING** | 源路径在 path_map.yaml 里没有匹配的前缀 | 在 path_mappings 加一条 source/target 后重跑 |
-| **ERROR_NO_PREFIX** | 该扩展名在 prefix_rules 里没有对应规则 / 或 default 缺失 | 给 prefix_rules 补一组扩展名规则后重跑 |
-| **ERROR_VERSION_CONFLICT** | corpus 目标位置已有同名文件,但字节 / mtime 不一致 | 走 G3-G9 人工判定;手动 mv corpus 中旧版到 `.archive/` 或重命名后再跑 |
-
-(还有 ERROR_MARKITDOWN_FAILED / ERROR_UNSUPPORTED_EXT,前者是工具异常,后者是扩展名没在 BINARY/TEXT 集合内 — 都罕见)
+| **ERROR_INVALID_PLAN_ITEM**(v0.2.1)| plan items[i] 路径边界校验失败(.. / 绝对路径 / 非白名单 bucket / filename 含路径分隔符)| AI 重写 plan 该 item |
+| **ERROR_TARGET_CONFLICT** | corpus 目标位置已有同名文件,但字节 / mtime 不一致 | 走 G3-G9 人工判定;手动 mv corpus 中旧版到 `.archive/` 或重命名后再跑 |
+| **ERROR_MARKITDOWN_FAILED** | markitdown 转换异常(如 markitdown 缺 [docx] extra → mammoth 缺失) | `pip install markitdown[docx]` 后重跑 |
+| **ERROR_UNSUPPORTED_EXT** | 扩展名不在 BINARY/TEXT/IMAGE/VIDEO/VSDX 集合内 | 罕见;具体情况具体分析 |
+| **ERROR_SRC_MISSING** | plan item 指向的源文件不存在 | 检查 routing_plan.json src_abs |
 
 ### log 文件位置 + 字段
 
-文件:`logs/ingest_log.jsonl`(JSON Lines)
+主日志:`logs/ingest_log.jsonl`(JSON Lines,追加写)
+单次执行明细:`logs/ingest_executed_<timestamp>.jsonl`(execute-plan 每次跑一份)
 
 每行一个 record:
+
 ```json
 {
   "timestamp": "<ISO 8601 时间戳>",
   "source_abs_path": "C:/Users/xxx/工作目录/.../某文件.docx",
-  "target_rel_path": "corpus/04-个人记忆/某项目专班/纪要-某文件.docx",
+  "target_rel_path": "corpus/01-projects/某项目/03-纪要/纪要-某文件.docx",
   "action": "INGESTED_MD",
   "rule_applied": "G16",
   "byte_size_src": 38693,
   "byte_size_tgt": 28818,
   "char_density": 0.7449,
-  "notes": "三件共存:源 + stub + .md,字符密度 74.5%"
+  "src_mtime": 1717340400,
+  "notes": "三件共存,密度 74.5%,frontmatter=injected_new"
 }
 ```
 
-`action` 枚举:`INGESTED_TEXT` / `INGESTED_MD` / `STUB_ONLY_G15` / `STUB_ONLY_G18` / `SKIPPED_DUP` / `ERROR_NO_MAPPING` / `ERROR_NO_PREFIX` / `ERROR_VERSION_CONFLICT` / `ERROR_MARKITDOWN_FAILED` / `ERROR_UNSUPPORTED_EXT` / `DRY_RUN_BINARY` / `DRY_RUN_TEXT`
+`action` 枚举:`INGESTED_TEXT` / `INGESTED_MD` / `STUB_ONLY_G2` / `STUB_ONLY_G15` / `STUB_ONLY_G18` / `STUB_ONLY_VSDX_NO_LIBREOFFICE` / `VISION_PENDING_IMAGE` / `VISION_PENDING_VIDEO` / `SKIPPED_DUP` / `SKIPPED_INCREMENTAL` / `SKIPPED_TEMP` / `ERROR_INVALID_PLAN_ITEM` / `ERROR_TARGET_CONFLICT` / `ERROR_MARKITDOWN_FAILED` / `ERROR_UNSUPPORTED_EXT` / `ERROR_SRC_MISSING` / `DRY_RUN_*`
 
-`rule_applied` 引用 G 规则编号(G14 前缀 / G15 扫描 stub / G16 文本主导 / G18 图形主导 stub)
+`rule_applied` 引用 G 规则编号(G2 超大 / G14 前缀 [v0.2 已废] / G15 扫描 / G16 文本主导 / G18 结构性稀薄 / V_PENDING_IMAGE / V_PENDING_VIDEO / v0.2-plan-routed / vsdx+G15/G16 / v0.5-incremental)
 
-### --dry-run 是首次 ingest 的标准做法
+### --dry-run 用法
 
-新目录第一次 ingest 前,**先 `--dry-run`** 看 ingest.py 会做什么:
-- 是否把每个文件都路由到正确的 corpus 子目录(NO_MAPPING 提前暴露)
-- 前缀推断对不对(NO_PREFIX 提前暴露)
-- 是否会产生 VERSION_CONFLICT(对老目录二次 ingest 时常见)
+`execute-plan --dry-run` 不写盘、不调 markitdown、不写 log,只打印 plan 计划的动作,用于二次确认 AI 产的 plan 是否合理。
 
-dry-run 不写盘、不调 markitdown、不写 log,只打印计划动作。
+---
+
+## archive_check.py(v0.2 新增)
+
+```bash
+.venv\Scripts\python.exe scripts/archive_check.py
+# → 扫 01-projects/ 下 6 个月以上无新文件的项目作为归档候选
+# → 输出 logs/archive_candidates_<date>.txt
+# → 只展示候选,不自动 mv(项目可能只是暂停 ≠ 已归档)
+```
+
+阈值调整:直改 `scripts/archive_check.py` 顶部 `ARCHIVE_THRESHOLD_DAYS = 180`(轻量原则,不引入 CLI 参数)。
+
+---
+
+## smoke_test.py(v0.2.1 新增)
+
+```bash
+.venv\Scripts\python.exe scripts/smoke_test.py
+# → 4 个核心 assert(install 调用参数 / scan-only / 路径边界拒绝 malformed / 关键依赖 import)
+```
+
+详见文件顶部注释。
 
 ### 第一版边界(留给第二版)
 

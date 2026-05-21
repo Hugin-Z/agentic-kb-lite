@@ -59,7 +59,7 @@ echo.
 
 REM ---------- [5/6] verify ----------
 echo [5/6] Verifying install (smoke test on search.py)...
-.venv\Scripts\python.exe scripts\search.py --scene all --terms "__install_smoke_test_zzzz__" >nul 2>&1
+.venv\Scripts\python.exe scripts\search.py --scope all --terms "__install_smoke_test_zzzz__" >nul 2>&1
 if errorlevel 1 goto :err_verify
 echo   [OK] verification passed
 echo.
@@ -102,6 +102,6 @@ exit /b 1
 
 :err_verify
 echo   [FAIL] verification step failed (search.py smoke test)
-echo     Install may be incomplete. Manual debug: .venv\Scripts\python.exe scripts\search.py --scene all --terms test
+echo     Install may be incomplete. Manual debug: .venv\Scripts\python.exe scripts\search.py --scope all --terms test
 echo     If still failing, contact the maintainer.
 exit /b 1

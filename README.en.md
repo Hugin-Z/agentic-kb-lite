@@ -13,15 +13,23 @@ This setup may fit you if any of the following apply:
 
 - You have a pile of personal or team work materials (proposals, bids, meeting notes, research, screenshots, screen recordings) and want to ask questions like *"how did I do this before / what did we use / what did we discuss"*
 - You **don't want to set up a heavy RAG stack** (vector DB + embeddings + rerank)
-- You **don't want to upload materials to a third-party SaaS**, but you also **don't want to deploy a local LLM**
 - You're already using Claude Code / Codex / another AI coding assistant, and are willing to let the AI read your files directly
 
 What makes this different:
 
-- **The only external model dependency is the LLM built into the AI coding assistant** (e.g., Claude inside Claude Code); no external API calls, no local model weights deployed
+- **This project itself does NOT call any external model API**; all inference is done by the AI coding assistant you're already using ⚠ **See the "Privacy boundary" section below**
 - **The only external tool dependencies are ripgrep + optional ffmpeg + optional poppler** (the last two only for multimodal scenarios)
 - Retrieval uses ripgrep + an LLM-driven multi-round agent loop; visual transcription uses the AI coding assistant's built-in vision capability reading images directly
 - **No semantic vector indexing, no chunking, no intrusive restructuring**; lightweight format conversion (markitdown converts docx/pptx/pdf to markdown) + metadata cards (`.stub.md` / `.vision.md`) let the LLM read directly
+
+### Privacy boundary (v0.2.1 revision: must read)
+
+> Wording in README prior to v0.2.0 ("zero external API / zero local model / no remote calls") may mislead enterprise / regulated users into thinking this is a fully offline system. **The actual boundary is**:
+
+- **This project's code itself**: does not call any external API, does not upload files; only does local ripgrep scanning + local markitdown conversion. This part is **fully local**
+- **But at the AI coding assistant layer**: if you use Claude Code / Codex / Cursor etc., **file contents enter the model context per the assistant's product mechanism** (which may involve uploading to cloud inference at Anthropic / OpenAI / other providers). This layer is **outside this project's control**
+- **For classified / regulated / internal materials**: use a **local-model assistant** (e.g., [ollama](https://ollama.com) + local CodeLlama / Qwen), or evaluate the compliance boundary / DPA (Data Processing Agreement) of your chosen assistant
+- **When unsure**: **anonymize / subset** materials before ingest, or run in an **isolated environment** (VM / sandbox directory) to avoid accidentally sending sensitive material to the cloud
 
 ## 2. Core features
 
@@ -33,7 +41,7 @@ What makes this different:
 | **Incremental ingest** | `python ingest.py <path>` defaults to incremental (skips already-ingested unchanged files); `--full` forces a full pass |
 | **Honest-fallback red line** | If nothing is found, say so; never fabricate. Scanned PDF / image-heavy PPT fall back to stub when toolchain is incomplete |
 | **Lightweight fixture evaluation** | E1–E7 agent loop scenarios + V1–V4 vision/video scenarios — reproducible regression tests |
-| **Zero external API / zero local model** | No remote model API calls, no local LLM deployment; all inference happens inside the AI coding assistant |
+| **This project doesn't call external APIs** | This repo's code **does not call any external API**; all inference is done by the AI coding assistant you're using. **Caveat**: whether the assistant uploads files to cloud inference depends on its product mechanism — see §1 Privacy boundary |
 
 ## 3. Quick Start
 

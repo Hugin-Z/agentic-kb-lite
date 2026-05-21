@@ -11,15 +11,24 @@
 
 - 你有一堆个人或团队工作素材(方案 / 标书 / 纪要 / 调研 / 截图 / 录屏),想问"我以前是怎么做的 / 我们用了什么 / 我之前讨论过什么"
 - 你**不想搭一套向量数据库 + Embedding + Rerank 的重型 RAG 栈**
-- 你**不想把素材传第三方 SaaS**,但又**懒得本地部署 LLM**
+- 你**不想搭一套向量数据库 + Embedding + Rerank 的重型 RAG 栈**
 - 你已经在用 Claude Code / Codex / 其他 AI 编程助手,愿意让 AI 直接读你的素材文件
 
 差异化:
 
-- **唯一外部模型依赖是 AI 编程助手内置 LLM**(以 Claude Code 为例,即其内置 Claude 模型),不调外部 API、不本地部署模型权重
+- **本项目自身不额外调用任何外部模型 API**,所有推理由你正在用的 AI 编程助手完成 ⚠ **见下方"隐私边界"段**
 - **唯一外部工具依赖是 ripgrep + 可选 ffmpeg + 可选 poppler**(后两者只在多模态场景需要)
 - 检索靠 ripgrep + LLM 多轮 agent loop;视觉转写靠 AI 编程助手内置的 vision 能力直接读图
 - **不做语义向量化索引,不做切分,不做侵入式重组**;轻量格式转换(markitdown 把 docx/pptx/pdf 转 markdown)+ 元数据卡片(`.stub.md` / `.vision.md`)让 LLM 能直接读
+
+### 隐私边界(v0.2.1 修订:必读)
+
+> v0.2.0 之前的 README 措辞"零外部 API / 零本地模型 / 不调远程"可能让政企用户误判为完全离线。**实际边界是**:
+
+- **本项目代码自身**:不调用任何外部 API,不上传文件,仅做本机 ripgrep 扫描 + markitdown 本机转换。这部分**完全本地**
+- **但 AI 编程助手层面**:若使用 Claude Code / Codex / Cursor 等助手,**文件内容会按对应助手的产品机制进入模型上下文**(可能涉及上传到 Anthropic / OpenAI / 其他服务商的云端推理)。这层不在本项目控制范围
+- **涉密 / 政企内部材料**:请**用本地模型助手**(如 [ollama](https://ollama.com) + 本地 CodeLlama / Qwen),或自行评估所用助手的合规边界 / DPA(数据处理协议)
+- **不确定时**:入库材料前做**脱敏 / 子集化**处理,或在**隔离环境**(虚拟机 / 沙箱目录)中运行,避免误把敏感素材传到云
 
 ## 2. 核心特性
 
@@ -31,7 +40,7 @@
 | **增量 ingest** | `python ingest.py <path>` 默认增量,跳过已 ingest 且未变文件;`--full` 强制全量 |
 | **诚实降级红线** | 找不到就说找不到,严禁补全;扫描 PDF / 图为主 PPT 工具链不全时走 stub 兜底 + 提示 |
 | **轻量 fixture 评估** | E1-E7 agent loop 场景 + V1-V4 vision/视频场景,可复现回归测试 |
-| **零外部 API / 零本地模型** | 不调任何远程模型 API,不本地部署 LLM,所有推理由 AI 编程助手内置完成 |
+| **本项目自身不调外部 API** | 本仓库代码层面**不调任何外部 API**,所有推理由你正在用的 AI 编程助手完成;**注意**:助手层面是否上传文件到云端推理,取决于具体助手的产品机制,**见 §1 隐私边界**|
 
 ## 3. Quick Start
 
@@ -110,6 +119,67 @@ explicit_mappings:
     target: "02-areas/合同档案/"
     reason: "目录虽含项目名,但内容是合同文档,归 areas 更合适"
 ```
+
+#### routing_plan.json 样例(AI 产出格式参考)
+
+AI 跑完 `scan-only` 后产出的 `routing_plan.json` 长这样(5 items 简化示例,覆盖典型场景):
+
+```json
+{
+  "src_root": "D:/工作目录/智慧城市可视化平台",
+  "plan_timestamp": "2026-05-22T10:00:00",
+  "ai_judgment_summary": "顶层判为 01-projects;标准/ 脱钩到 03-resources/国标行标 + 项目前缀消歧;纪要/ 留在项目内 03-纪要/;已交付/ 进 04-archives;explicit_mappings 命中覆盖 1 条",
+  "items": [
+    {
+      "src_abs": "D:/工作目录/智慧城市可视化平台/总体方案.docx",
+      "target_bucket": "01-projects",
+      "target_project": "智慧城市可视化平台",
+      "target_subdir": "01-方案",
+      "target_filename": "总体方案.docx",
+      "frontmatter": {"type": "方案", "date": "2026-03-15", "project": "智慧城市可视化平台", "tags": []},
+      "ai_reason": "Step D:文件名含'方案' + 项目顶层 → 01-方案/"
+    },
+    {
+      "src_abs": "D:/工作目录/智慧城市可视化平台/标准/CIM技术规范.pdf",
+      "target_bucket": "03-resources",
+      "target_project": null,
+      "target_subdir": "国标行标",
+      "target_filename": "智慧城市可视化平台_CIM技术规范.pdf",
+      "frontmatter": {"type": "国标", "date": "2024-12-01", "project": null, "tags": ["CIM"]},
+      "ai_reason": "Step C:标准/ 子目录 = 跨项目可复用 → 脱钩到 03-resources/国标行标/;target_filename 加项目前缀消歧"
+    },
+    {
+      "src_abs": "D:/工作目录/智慧城市可视化平台/纪要/2026-03-10客户沟通.docx",
+      "target_bucket": "01-projects",
+      "target_project": "智慧城市可视化平台",
+      "target_subdir": "03-纪要",
+      "target_filename": "2026-03-10客户沟通.docx",
+      "frontmatter": {"type": "纪要", "date": "2026-03-10", "project": "智慧城市可视化平台", "tags": []},
+      "ai_reason": "Step D:父目录'纪要/' + 文件名含日期 → 03-纪要/(date 取文件名)"
+    },
+    {
+      "src_abs": "D:/工作目录/智慧城市可视化平台/已交付/初验报告.pdf",
+      "target_bucket": "04-archives",
+      "target_project": null,
+      "target_subdir": "智慧城市可视化平台",
+      "target_filename": "初验报告.pdf",
+      "frontmatter": {"type": "验收", "date": "2025-12-20", "project": "智慧城市可视化平台", "tags": ["已交付"]},
+      "ai_reason": "Step B:父目录名含'已交付' → 04-archives/(archives_hint 命中)"
+    },
+    {
+      "src_abs": "D:/工作目录/智慧城市可视化平台/合同/某合同.pdf",
+      "target_bucket": "02-areas",
+      "target_project": null,
+      "target_subdir": "合同档案",
+      "target_filename": "智慧城市可视化平台_某合同.pdf",
+      "frontmatter": {"type": "合同", "date": "2026-01-15", "project": null, "tags": ["合同档案"]},
+      "ai_reason": "Step A:explicit_mappings 命中('某客户合同包' → 02-areas/合同档案/);跳过 Step B-D 常规判断"
+    }
+  ]
+}
+```
+
+**说明**:每个 item 的 `src_abs` / `target_bucket` / `target_filename` 必填(P0-2 路径边界校验);`target_project` 仅 01-projects 必填;`frontmatter.project` 在非 projects 类落地时应为 null。schema 完整字段见 [CLAUDE.md §6.3](CLAUDE.md) + [docs/v0.2-plan.md §5.3 步骤 2.3](docs/v0.2-plan.md)。
 
 ### 3.4 用 AI 编程助手跑一次
 
@@ -239,6 +309,14 @@ agentic-kb-lite/
 - **shp(GIS 空间数据)**:`.shp/.shx/.dbf/.prj` 等空间数据文件**不在本仓库检索范围**。如果需要"项目用过什么投影 / 字段名"等元数据级检索,请用 GIS 工具(QGIS / ArcGIS)导出 `.prj` 投影信息和 `.dbf` 字段名为 `.txt`,再 ingest。
 - **vsdx(Visio)**:走 LibreOffice headless 转 PDF 后接 binary 路径。**LibreOffice 不可用时永久 stub 标 `failed_no_libreoffice`**(降级,不阻塞)。安装 LibreOffice 后重跑 ingest 自动转换。**v0.2.0 release 时本机未装 LibreOffice,正向路径未实证;v0.2.1 计划回归**。
 - **odf(OpenDocument)**:`.odt/.ods/.odp` 经 markitdown 处理。**v0.2.0 版本下 markitdown 0.1.5 不带 ODF converter,实际走 G15 永久 stub + `odf_status: failed_markitdown_no_odf_converter` 标记**;需正文检索请先用 LibreOffice 转 .docx 后再入库(已有完整 docx G16 路径)。markitdown 后续版本支持 ODF 时自动生效无需改代码。
+
+### 3.6 验证安装(v0.2.1 新增)
+
+```bash
+python scripts/smoke_test.py
+```
+
+4 个 assert(install 调用参数 / scan-only / 路径边界拒绝 malformed / 关键依赖 import),~3 秒跑完。任一失败说明环境有缺。**完整自动化测试见 [scripts/smoke_test.py](scripts/smoke_test.py)**。
 
 ## 6. 完整文档导航
 

@@ -118,10 +118,14 @@ def check_rg_proc(proc, terms, args):
     sys.exit(2)
 
 
-def run_rg(rg, terms, dirs, context, regex=False):
+def run_rg(rg, terms, dirs, context, regex=False, no_stub=False):
+    """v0.2.1 P1-8: --no-stub 在 rg 参数层加 --glob '!*.stub.md',
+    避免后处理过滤后 per_term_hits 与 files 计数不一致(误导 LLM 回退判断)。"""
     args = [rg, "--json", "-i", "-C", str(context),
             "--glob", "!.references.md",
             "--glob", "!.archive/**"]
+    if no_stub:
+        args.extend(["--glob", "!*.stub.md"])
     if not regex:
         args.append("--fixed-strings")
     for t in terms:
@@ -140,12 +144,15 @@ def run_rg(rg, terms, dirs, context, regex=False):
     return events
 
 
-def per_term_hits(rg, terms, dirs, regex=False):
+def per_term_hits(rg, terms, dirs, regex=False, no_stub=False):
+    """v0.2.1 P1-8: 同 run_rg 透传 --no-stub,确保 per_term_hits 与 files 共享 glob。"""
     hits = {}
     for t in terms:
         args = [rg, "-l", "-i",
                 "--glob", "!.references.md",
                 "--glob", "!.archive/**"]
+        if no_stub:
+            args.extend(["--glob", "!*.stub.md"])
         if not regex:
             args.append("--fixed-strings")
         args.extend(["-e", t])
@@ -243,15 +250,14 @@ def main():
         if not d.is_dir():
             sys.stderr.write(f"ERROR: corpus 子目录不存在 {d}\n")
             sys.exit(2)
-    events = run_rg(rg, terms, dirs, args.context, regex=args.regex)
+    events = run_rg(rg, terms, dirs, args.context, regex=args.regex, no_stub=args.no_stub)
     files = group(events)
     for p in list(files):
         if len(files[p]) > 200:
             files[p] = files[p][:200]
+    # v0.2.1 P1-8: --no-stub 已在 rg 层过滤,这里 stubs 必为空集
     stubs = {p: l for p, l in files.items() if p.endswith(".stub.md")}
     texts = {p: l for p, l in files.items() if not p.endswith(".stub.md")}
-    if args.no_stub:
-        stubs = {}
     text_trim = stub_trim = False
     if len(texts) > args.max_files:
         texts = {k: texts[k] for k in list(texts)[:args.max_files]}
@@ -295,7 +301,7 @@ def main():
     else:
         print("(无)\n")
     print("## 三、未命中检索词\n")
-    term_hits = per_term_hits(rg, terms, dirs, regex=args.regex)
+    term_hits = per_term_hits(rg, terms, dirs, regex=args.regex, no_stub=args.no_stub)
     zero_terms = [t for t, n in term_hits.items() if n == 0]
     if not zero_terms:
         print("— 本次所有检索词均有命中\n")
