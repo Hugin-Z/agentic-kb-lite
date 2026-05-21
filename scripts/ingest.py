@@ -1,17 +1,16 @@
-"""ingest.py — knowledge-base 自动化 ingest pipeline(第一版)
+"""ingest.py — knowledge-base ingest pipeline (v0.2: AI 语义路由)
 
-对应 tests/查询记录.md G14-G18 规则,纯规则驱动,不调 LLM。
+v0.1 → v0.2 范式切换:
+  - v0.1:`python ingest.py <path>`  → 单命令入口,内部按 path_map.yaml 规则匹配路由
+  - v0.2:`python ingest.py scan-only <src>`     → 扫目录输出 routing_request.json
+         `python ingest.py execute-plan <plan>` → 按 AI 给的 plan 执行迁移 + frontmatter 注入
 
-用法:
-  python scripts/ingest.py <path>                            # 单文件或目录(递归)
-  python scripts/ingest.py <path> --dry-run                  # 仅打印将要执行的动作,不写盘
-  python scripts/ingest.py <path> --prefix-override 参考-    # 跨项目参考素材(J5 类)用,绕过 prefix_rules
+为什么:真实操作者是 AI(Claude Code 在 agent loop 里跑 ingest);AI 看子目录名一眼就知道
+"标准/"是 resources、"投标资料/"是 areas、"智慧城市可视化平台"是 project,把判断写进
+yaml 正则是低效的反 AI 设计。详见 docs/v0.2-plan.md §2.2、CLAUDE.md 第 6 节"PARA 路由协议"。
 
-不做的事(第一版边界):
-  - 不做版本族(G3-G9)自动检测,留第二版
-  - 不调 LLM(纯规则)
-  - 不做 URL 输入
-  - 不处理删除同步(增量 only)
+G14/G15/G16/G18 分流、markitdown 转换、stub 生成、vision_pending 标记**完全保留**,只是
+target 路径由 routing_plan 外部给定,不再由 path_map.yaml 内部推断。
 """
 import argparse
 import json
@@ -31,66 +30,142 @@ CORPUS = REPO / "corpus"
 PATH_MAP_FILE = REPO / "path_map.yaml"
 INGEST_LOG = REPO / "logs" / "ingest_log.jsonl"
 
-BINARY_EXTS = {".docx", ".doc", ".xlsx", ".pptx", ".pdf"}
+BINARY_EXTS = {".docx", ".doc", ".xlsx", ".pptx", ".pdf",
+               # v0.2 阶段 4:vsdx + odf 三件加入 markitdown 主流程
+               ".vsdx", ".odt", ".ods", ".odp"}
 TEXT_EXTS = {".html", ".txt", ".md", ".json"}
 
-# v0.3 多模态接入:vision 待转扩展名(图像 + 视频)
-# IMAGE_EXTS:纯图像文件,直接走 vision 待转(无需 markitdown 转 .md)
-# VIDEO_EXTS:视频文件,走路径 B(ffmpeg 抽帧 + 逐帧 vision)
-# 两者都在 process_file 内独立分支处理,不污染 BINARY/TEXT 流;
-# infer_prefix 返回 None 时为这两类提供内置默认前缀(图-/视频-)
+# v0.2 阶段 4:vsdx 走 LibreOffice headless 转 PDF 后接现有 G15/G16 路径;
+# LibreOffice 不可用时永久 stub 标 failed_no_libreoffice(plan §7.3 步骤 4.3)
+VSDX_EXT = ".vsdx"
+
+# v0.3 多模态接入(沿用 v0.1):图像 + 视频走 vision 待转
 IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".gif", ".bmp", ".webp"}
 VIDEO_EXTS = {".mp4", ".mov", ".avi", ".mkv", ".wmv", ".flv", ".webm", ".m4v", ".mpg", ".mpeg"}
 
 DENSITY_THRESHOLD = 0.05      # G18 触发的字符密度上限(< 5%)
 CHAR_COUNT_THRESHOLD = 2000   # G18 触发的字符总数上限(< 2000)
-# G18 双条件 AND:密度 < 5% 且 字符总数 < 2000,即 R4-A 结构性稀薄
-# 任一不成立走 G16(密度低但字符数足 = R4-B 衰减性稀薄,内容上足以入库)
 
 sys.stdout.reconfigure(encoding="utf-8")
 sys.stderr.reconfigure(encoding="utf-8")
-
-
-def load_config():
-    if not PATH_MAP_FILE.is_file():
-        sys.stderr.write(f"ERROR: path_map.yaml 不存在 {PATH_MAP_FILE}\n")
-        sys.exit(2)
-    with open(PATH_MAP_FILE, encoding="utf-8") as f:
-        cfg = yaml.safe_load(f) or {}
-    return cfg.get("path_mappings", []) or [], cfg.get("prefix_rules", {}) or {}
 
 
 def norm_path(p):
     return str(p).replace("\\", "/")
 
 
-def find_target_subdir(src_abs, mappings):
-    """最长前缀匹配。返回 target_subdir 或 None。"""
-    src_str = norm_path(src_abs)
-    best = None
-    best_len = -1
-    for m in mappings:
-        prefix = norm_path(m["source"]).rstrip("/")
-        if src_str == prefix or src_str.startswith(prefix + "/"):
-            if len(prefix) > best_len:
-                best = m["target"]
-                best_len = len(prefix)
-    return best
+# ====================== v0.2 新增:scan-only / execute-plan / inject_frontmatter ======================
 
 
-def infer_prefix(filename, ext, rules):
-    """按扩展名查 prefix_rules。返回 (prefix, rule_note) 或 (None, None)。"""
-    rule = rules.get(ext)
-    if rule is None:
-        return None, None
-    for kw in rule.get("keywords", []) or []:
-        pat = kw["pattern"]
-        if re.search(pat, filename, flags=re.IGNORECASE):
-            return kw["prefix"], f"keyword:{pat}"
-    default = rule.get("default")
-    if default:
-        return default, "default"
-    return None, None
+def _file_node(p: Path, src_root: Path) -> dict:
+    stat = p.stat()
+    return {
+        "rel_path": norm_path(p.relative_to(src_root)),
+        "abs_path": norm_path(p.resolve()),
+        "size_bytes": stat.st_size,
+        "mtime": datetime.fromtimestamp(stat.st_mtime).strftime("%Y-%m-%dT%H:%M:%S"),
+        "type": "file",
+        "ext": p.suffix.lower(),
+    }
+
+
+def _dir_node(d: Path, src_root: Path, child_count: int) -> dict:
+    return {
+        "rel_path": norm_path(d.relative_to(src_root)) + "/",
+        "type": "dir",
+        "child_count": child_count,
+    }
+
+
+def scan_and_write_request(src_dir: Path, output: Path) -> dict:
+    """扫源目录 → routing_request.json(v0.2 步骤 2.2)。
+    不做任何路由/分流判断,纯目录扫描。"""
+    src_dir = src_dir.resolve()
+    if not src_dir.is_dir():
+        sys.stderr.write(f"ERROR: src_dir 不是目录:{src_dir}\n")
+        sys.exit(2)
+
+    tree: list[dict] = []
+    ext_counts: dict[str, int] = defaultdict(int)
+    file_count = dir_count = 0
+    for item in sorted(src_dir.rglob("*")):
+        if item.is_dir():
+            # 排除 __pycache__ / .git 等
+            if item.name in ("__pycache__", ".git"):
+                continue
+            children = [c for c in item.iterdir() if not (c.name == "__pycache__" or c.name == ".git")]
+            tree.append(_dir_node(item, src_dir, len(children)))
+            dir_count += 1
+            continue
+        # 文件:跳过临时/隐藏(同 ingest 主流程)
+        skip, _ = is_temp_or_hidden(item.name, item)
+        if skip:
+            continue
+        tree.append(_file_node(item, src_dir))
+        ext_counts[item.suffix.lower()] += 1
+        file_count += 1
+
+    request = {
+        "src_root": norm_path(src_dir),
+        "scan_timestamp": datetime.now().isoformat(timespec="seconds"),
+        "tree": tree,
+        "stats": {
+            "total_files": file_count,
+            "total_dirs": dir_count,
+            "extensions": dict(sorted(ext_counts.items())),
+        },
+    }
+
+    output = output.resolve()
+    output.parent.mkdir(parents=True, exist_ok=True)
+    output.write_text(json.dumps(request, ensure_ascii=False, indent=2), encoding="utf-8")
+    try:
+        out_disp = output.relative_to(REPO)
+    except ValueError:
+        out_disp = output
+    print(f"[scan-only] {file_count} 文件 / {dir_count} 目录 → {out_disp}")
+    return request
+
+
+def inject_frontmatter(md_file: Path, frontmatter: dict) -> str:
+    """v0.2 步骤 2.4:向 .md 注入 YAML frontmatter。
+    - 已有 frontmatter:保留,只补缺失字段(不覆盖原值)
+    - 无 frontmatter:完整注入
+    - frontmatter 格式坏:跳过(保守),返回 'malformed_preserved'
+    返回 'injected_new' / 'merged_existing' / 'malformed_preserved' / 'no_change'
+    """
+    content = md_file.read_text(encoding="utf-8")
+
+    if content.startswith("---\n"):
+        end_marker = content.find("\n---\n", 4)
+        if end_marker < 0:
+            return "malformed_preserved"
+        existing_fm_text = content[4:end_marker]
+        try:
+            existing_fm = yaml.safe_load(existing_fm_text) or {}
+            if not isinstance(existing_fm, dict):
+                return "malformed_preserved"
+        except yaml.YAMLError:
+            return "malformed_preserved"
+        added = 0
+        for k, v in frontmatter.items():
+            if k not in existing_fm:
+                existing_fm[k] = v
+                added += 1
+        if added == 0:
+            return "no_change"
+        new_fm_text = yaml.safe_dump(existing_fm, allow_unicode=True, default_flow_style=False, sort_keys=False)
+        content = f"---\n{new_fm_text}---\n{content[end_marker+5:]}"
+        md_file.write_text(content, encoding="utf-8")
+        return "merged_existing"
+
+    fm_text = yaml.safe_dump(frontmatter, allow_unicode=True, default_flow_style=False, sort_keys=False)
+    content = f"---\n{fm_text}---\n\n{content}"
+    md_file.write_text(content, encoding="utf-8")
+    return "injected_new"
+
+
+# ====================== 保留:v0.1 公共工具(make_stub / extract_pptx_assets / 增量判定 等) ======================
 
 
 def get_md_engine(holder):
@@ -114,10 +189,7 @@ def make_stub(src_path, scene, rule_id, density=None, char_count=None,
               source_abs_path=None, prefixed_name=None,
               vision_assets=None, vision_assets_extraction=None,
               vision_assets_raw_count=None):
-    """生成 G11 stub 内容。scene 形如 '01-历史方案'。
-    source_abs_path: ingest 时的源文件绝对路径,写入"源路径"字段(G11 必填,R3 退 stub 例外)。
-    prefixed_name: corpus 落地的带前缀文件名,用于 G16 指向同目录 .md 兄弟文件。
-    """
+    """生成 G11 stub 内容。scene 现在由 plan 决定(如 '01-projects/智慧城市可视化平台'),不再从 path_map 取。"""
     src = Path(src_path)
     stat = src.stat()
     ext = src.suffix.lstrip(".").lower()
@@ -130,7 +202,6 @@ def make_stub(src_path, scene, rule_id, density=None, char_count=None,
     name_no_ext = src.stem
     src_path_field = source_abs_path if source_abs_path is not None else str(src)
 
-    # v0.3:vision_pending 标记 — 哪些 rule_id 的 stub 需要等待 vision 转写
     vision_pending = rule_id in ("G15", "G18", "V_PENDING_IMAGE", "V_PENDING_VIDEO")
 
     if rule_id == "G2":
@@ -165,7 +236,6 @@ def make_stub(src_path, scene, rule_id, density=None, char_count=None,
                     "回答时只可说\"该问题相关素材是视频,vision 正文未入库;请打开源路径或等待 vision 转写\","
                     "**禁止**对视频内容做任何推断。")
     else:
-        # G16:三件共存(源 binary + 本 stub + 同目录 .md)
         status = (f"已转 markdown 正文(同目录 .md 文件;"
                   f"G16 三件共存形态:源 binary + 本 stub + .md")
         if density is not None:
@@ -178,7 +248,6 @@ def make_stub(src_path, scene, rule_id, density=None, char_count=None,
 
     keywords = derive_keywords(name_no_ext)
     vision_pending_line = "- vision_pending: YES\n" if vision_pending else ""
-    # v0.3+ pptx 自动解嵌入图:vision_assets 三字段,仅在 extraction 非空时输出
     va_block = ""
     if vision_assets_extraction is not None:
         va_block = f"- vision_assets_extraction: {vision_assets_extraction}\n"
@@ -206,8 +275,7 @@ def make_stub(src_path, scene, rule_id, density=None, char_count=None,
 
 
 def extract_pptx_assets(pptx_path, target_dir):
-    """zipfile 解 .pptx 嵌入图(30KB 体积闸 + 20 张数量闸 + thumbnail/hyperlink 名闸 + zip-slip 校验 + try/except 降级)。
-    返回 (status, [rel_paths] or None, raw_count or None);status ∈ {success, filtered_to_zero, no_media_in_zip, failed}。"""
+    """zipfile 解 .pptx 嵌入图(30KB 体积闸 + 20 张数量闸 + thumbnail/hyperlink 名闸 + zip-slip 校验 + try/except 降级)。"""
     MIN_SIZE, MAX_ASSETS = 30 * 1024, 20
     IMG = (".png", ".jpg", ".jpeg", ".gif", ".bmp", ".webp")
     BLK = ("thumbnail", "hyperlink")
@@ -228,7 +296,6 @@ def extract_pptx_assets(pptx_path, target_dir):
             assets_abs = os.path.abspath(assets_dir)
             extracted = []
             for n, _ in cands:
-                # zip-slip 防御:原始 name 解析后必须在 assets_dir 内,通过后扁平化到 .assets/ 根
                 if os.path.commonpath([assets_abs, os.path.abspath(os.path.join(assets_dir, n))]) != assets_abs:
                     sys.stderr.write(f"skipped_zip_slip_attempt: {n}\n")
                     continue
@@ -242,35 +309,125 @@ def extract_pptx_assets(pptx_path, target_dir):
         return "failed", None, None
 
 
+def extract_docx_assets(docx_path, target_dir):
+    """v0.2 阶段 4 步骤 4.1:zipfile 解 .docx 嵌入图(word/media/*),沿用 v0.4 .pptx 三闸过滤机制。
+    返回 (status, [rel_paths] or None, raw_count or None);status ∈ {success, filtered_to_zero, no_media_in_zip, failed}。
+
+    类比 extract_pptx_assets,差异:
+      - 媒体目录 ppt/media → word/media
+      - 解出 dir 命名仍是 `<prefixed_name>.assets/`(沿用 v0.4 命名,vision 转完即删)
+    """
+    MIN_SIZE, MAX_ASSETS = 30 * 1024, 20
+    IMG = (".png", ".jpg", ".jpeg", ".gif", ".bmp", ".webp")
+    BLK = ("thumbnail", "hyperlink")
+    try:
+        with zipfile.ZipFile(docx_path) as z:
+            media = [(n, z.getinfo(n).file_size) for n in z.namelist()
+                     if n.startswith("word/media/") and n.lower().endswith(IMG)]
+            raw = len(media)
+            if raw == 0:
+                return "no_media_in_zip", None, 0
+            cands = sorted(((n, s) for n, s in media
+                            if s >= MIN_SIZE and not any(b in Path(n).name.lower() for b in BLK)),
+                           key=lambda x: -x[1])[:MAX_ASSETS]
+            if not cands:
+                return "filtered_to_zero", None, raw
+            assets_dir = target_dir / f"{Path(docx_path).name}.assets"
+            assets_dir.mkdir(parents=True, exist_ok=True)
+            assets_abs = os.path.abspath(assets_dir)
+            extracted = []
+            for n, _ in cands:
+                if os.path.commonpath([assets_abs, os.path.abspath(os.path.join(assets_dir, n))]) != assets_abs:
+                    sys.stderr.write(f"skipped_zip_slip_attempt: {n}\n")
+                    continue
+                dst = assets_dir / Path(n).name
+                with z.open(n) as src:
+                    dst.write_bytes(src.read())
+                extracted.append(norm_path(dst.relative_to(REPO)))
+            return "success", extracted, raw
+    except Exception as e:
+        sys.stderr.write(f"extract_docx_assets failed for {docx_path}: {e}\n")
+        return "failed", None, None
+
+
+def extract_docx_tables(docx_path):
+    """v0.2 阶段 4 步骤 4.2:python-docx 抽 docx 所有表格 → markdown 表格列表。
+    处理合并单元格(占位标记)和空单元格(标"-")。
+
+    返回 [str, ...] markdown 表格字符串列表(每个表一个 str)。失败返回 []。
+
+    设计:不替换 markitdown 转出的"空骨架表",而是把 python-docx 抽出的版本作为补充段
+    append 到 .md 末尾"## 嵌入表(python-docx 抽取版本)"。两份共存让 LLM 检索时有 2 个命中。
+    """
+    try:
+        from docx import Document
+    except ImportError:
+        sys.stderr.write("WARN: python-docx 未安装,跳过 docx 嵌入表抽取(pip install python-docx)\n")
+        return []
+    try:
+        doc = Document(str(docx_path))
+    except Exception as e:
+        sys.stderr.write(f"extract_docx_tables open failed for {docx_path}: {e}\n")
+        return []
+
+    md_tables = []
+    for tbl in doc.tables:
+        rows = []
+        for row in tbl.rows:
+            cells_text = []
+            for cell in row.cells:
+                # python-docx 合并单元格:同一 cell.text 会在合并的多个 row 出现;
+                # 用 "—" 替换 cell 内 | 字符,避免破坏 markdown 表格语法
+                txt = (cell.text or "").strip().replace("|", "／").replace("\n", " ")
+                if not txt:
+                    txt = "-"
+                cells_text.append(txt)
+            rows.append(cells_text)
+        if not rows:
+            continue
+        ncols = max(len(r) for r in rows)
+        # 对齐列数(python-docx 合并单元格场景可能 row 列数不齐,补 "-")
+        rows = [r + ["-"] * (ncols - len(r)) for r in rows]
+        # 第一行作为表头
+        header = "| " + " | ".join(rows[0]) + " |"
+        sep = "| " + " | ".join(["---"] * ncols) + " |"
+        body = ["| " + " | ".join(r) + " |" for r in rows[1:]]
+        md_tables.append("\n".join([header, sep] + body))
+    return md_tables
+
+
+def process_vsdx_to_pdf(vsdx_path, target_dir):
+    """v0.2 阶段 4 步骤 4.3:soffice headless 把 .vsdx 转 PDF。
+    返回 (status, pdf_path_or_None);
+    status ∈ {success, failed_no_libreoffice, failed_convert}
+    """
+    import subprocess
+    soffice = shutil.which("soffice") or shutil.which("libreoffice")
+    if not soffice:
+        return "failed_no_libreoffice", None
+    try:
+        result = subprocess.run(
+            [soffice, "--headless", "--convert-to", "pdf",
+             "--outdir", str(target_dir), str(vsdx_path)],
+            capture_output=True, timeout=120, text=True,
+        )
+        if result.returncode != 0:
+            sys.stderr.write(f"soffice convert failed: {result.stderr}\n")
+            return "failed_convert", None
+        pdf_path = target_dir / (Path(vsdx_path).stem + ".pdf")
+        if not pdf_path.is_file():
+            return "failed_convert", None
+        return "success", pdf_path
+    except Exception as e:
+        sys.stderr.write(f"process_vsdx_to_pdf failed: {e}\n")
+        return "failed_convert", None
+
+
 def files_equal(a, b):
     if not (a.is_file() and b.is_file()):
         return False
     sa, sb = a.stat(), b.stat()
     return sa.st_size == sb.st_size and int(sa.st_mtime) == int(sb.st_mtime)
-
-
-def get_baseline(name_no_ext):
-    """切出基线名(供同基线 glob)。简单实现:strip 末尾 [\\d._\\-vV]+ 字符。
-    例:'tool_v3' → 'tool_v';'tool_v3_backup' → 'tool_v3_backup'(末尾非 strip 字符,基线即原名)。
-    若 strip 后 < 4 字符则保留原名(避免误匹配)。"""
-    base = re.sub(r"[\d._\-vV]+$", "", name_no_ext)
-    return base if len(base) >= 4 else name_no_ext
-
-
-def find_baseline_family(target_dir, prefix, src_basename):
-    """glob 同目录下同基线文件。返回 [(name, bytes, mtime_str), ...] 排序。"""
-    name_no_ext = Path(src_basename).stem
-    baseline = get_baseline(name_no_ext)
-    pat = f"{prefix}{baseline}*"
-    family = []
-    if target_dir.is_dir():
-        for f in sorted(target_dir.glob(pat)):
-            if f.is_file() and not f.name.endswith(".stub.md") and not f.name.endswith(".md"):
-                # 只数源/正文层文件,不数派生 stub/md
-                st = f.stat()
-                mt = datetime.fromtimestamp(st.st_mtime).strftime("%Y-%m-%d %H:%M")
-                family.append((f.name, st.st_size, mt))
-    return family, baseline
 
 
 def log_action(record):
@@ -280,8 +437,6 @@ def log_action(record):
 
 
 def load_ingest_log():
-    """v0.5 增量 ingest:读 INGEST_LOG,按 source_abs_path 索引最新记录(timestamp 最大)。
-    返回 {source_abs_path: record},log 不存在返回空 dict。"""
     if not INGEST_LOG.is_file():
         return {}
     latest = {}
@@ -293,7 +448,7 @@ def load_ingest_log():
             try:
                 rec = json.loads(line)
             except json.JSONDecodeError:
-                continue  # 损坏行静默跳过,不影响其余记录
+                continue
             src = rec.get("source_abs_path")
             if not src:
                 continue
@@ -304,25 +459,24 @@ def load_ingest_log():
 
 
 def is_already_ingested(src_path, log_records):
-    """v0.5 增量 ingest:按 Plan a Section 3 的 5 种情形规则判定。
-    返回 True = 跳过(已入库且未变);False = 重入(走全量分流)。"""
+    """v0.5 增量 ingest:5 情形规则判定。"""
     rec = log_records.get(str(src_path))
     if rec is None:
-        return False  # 情形 4 无记录
+        return False
     if rec.get("action", "").startswith("ERROR_"):
-        return False  # 情形 5 上次错误,重试
+        return False
     target_rel = rec.get("target_rel_path")
     if not target_rel or not (REPO / target_rel).exists():
-        return False  # 情形 3 target 被删
+        return False
     try:
         st = Path(src_path).stat()
     except OSError:
-        return False  # 源不存在(应在 gather_files 已过滤,防御性)
+        return False
     if st.st_size != rec.get("byte_size_src"):
-        return False  # 情形 2 size 变
+        return False
     if int(st.st_mtime) != rec.get("src_mtime"):
-        return False  # 情形 2 mtime 变(v0.5 之前的记录缺 src_mtime,自动判为不等触发重入)
-    return True  # 情形 1 完全一致,跳过
+        return False
+    return True
 
 
 def make_record(src_path, target_rel, action, rule_applied, src_size, tgt_size, notes, char_density=None):
@@ -338,8 +492,6 @@ def make_record(src_path, target_rel, action, rule_applied, src_size, tgt_size, 
     }
     if char_density is not None:
         rec["char_density"] = round(char_density, 4)
-    # v0.5 增量 ingest:src_mtime(整数秒)用于跨次 ingest 的"内容/mtime 变更"判定;
-    # 源文件已不存在的并发删除场景静默跳过(罕见,且 src 不存在时本次 ingest 早就走 ERROR 分支了)
     try:
         rec["src_mtime"] = int(Path(src_path).stat().st_mtime)
     except OSError:
@@ -348,138 +500,234 @@ def make_record(src_path, target_rel, action, rule_applied, src_size, tgt_size, 
 
 
 def is_temp_or_hidden(name, src_path=None):
-    """返回 (is_skip, reason)。匹配则跳过,不进入后续分流。
-    src_path: 可选完整路径;用于 v0.3+ .assets/ 子目录跳过判定(.pptx 嵌入图临时存放)。"""
     if name.startswith("~$"):
         return True, "Office 锁文件(~$ 开头)"
     if name in ("Thumbs.db", "desktop.ini"):
         return True, "Windows 系统文件"
     if name.endswith((".tmp", ".lock", ".bak")):
         return True, "临时文件(.tmp/.lock/.bak)"
-    # v0.3:.vision.md 是 vision 转写派生文件,重新 ingest 同目录时明确跳过
-    # (.stub.md 由 prefix_rules 缺 .md 规则间接跳过,这里 .vision.md 显式跳过更清晰)
     if name.endswith(".vision.md"):
         return True, "派生 vision 转写文件(.vision.md)"
-    # v0.3+ pptx 自动解嵌入图:.assets/ 子目录是临时存放,vision 转完即删,不入库
     if src_path is not None and any(p.endswith(".assets") for p in Path(src_path).parts):
         return True, "派生 vision 嵌入图(.assets/ 目录内)"
-    # 隐藏文件(. 开头),但保留我们自己的 .stub.md / .references.md
+    if src_path is not None and any(p.endswith(".frames") for p in Path(src_path).parts):
+        return True, "派生视频抽帧(.frames/ 目录内)"
     if name.startswith(".") and not (name.endswith(".stub.md") or name == ".references.md"):
         return True, "隐藏文件(. 开头,非本仓库 stub)"
     return False, None
 
 
-def process_file(src_abs, mappings, rules, dry_run, md_engine_holder, prefix_override=None):
-    src_path = Path(src_abs)
+# ====================== v0.2 重构:process_file_with_explicit_target ======================
+
+
+def _build_target_dir(item: dict) -> Path:
+    """从 plan item 构造 corpus 内 target_dir 绝对路径。"""
+    bucket = item["target_bucket"]
+    parts = [bucket]
+    if bucket == "01-projects":
+        parts.append(item["target_project"])
+        parts.append(item["target_subdir"])
+    else:
+        # 02-areas / 03-resources / 04-archives:target_subdir 可能是多级(如 'areas/产品方案库')
+        sub = item.get("target_subdir") or ""
+        if sub:
+            parts.extend(sub.strip("/").split("/"))
+    return CORPUS.joinpath(*parts)
+
+
+def _scene_label(item: dict) -> str:
+    """供 make_stub 的 scene 字段使用。"""
+    bucket = item["target_bucket"]
+    if bucket == "01-projects":
+        return f"{bucket}/{item['target_project']}"
+    sub = item.get("target_subdir") or ""
+    return f"{bucket}/{sub}" if sub else bucket
+
+
+def process_file_with_explicit_target(item: dict, dry_run: bool, md_engine_holder, incremental: bool, log_records: dict) -> dict:
+    """v0.2 步骤 2.3:target 路径由 plan 外部传入,G14/G15/G16/G18 分流逻辑保持不变。
+
+    item 必填字段(详见 docs/v0.2-plan.md §2.3 与附录 A.1):
+      src_abs / target_bucket / target_subdir / target_filename / frontmatter / ai_reason
+      (01-projects 还要 target_project)
+    """
+    src_path = Path(item["src_abs"])
+    if not src_path.exists():
+        return make_record(src_path, None, "ERROR_SRC_MISSING", None, 0, None,
+                          f"plan item 指向的源文件不存在:{src_path}")
     src_stat = src_path.stat()
     src_size = src_stat.st_size
     ext = src_path.suffix.lower()
 
-    # 0. 临时 / 锁 / 隐藏文件:早期跳过,不进入 mapping/prefix/分流
     skip, skip_reason = is_temp_or_hidden(src_path.name, src_path)
     if skip:
-        rec = make_record(src_path, None, "SKIPPED_TEMP", None, src_size, None,
+        return make_record(src_path, None, "SKIPPED_TEMP", None, src_size, None,
                           f"{skip_reason},自动跳过")
-        # 不写 ingest_log(避免污染主日志,体量太大),只走汇总
-        return rec
 
-    # 1. 查 path_map
-    target_subdir = find_target_subdir(src_path, mappings)
-    if target_subdir is None:
-        rec = make_record(src_path, None, "ERROR_NO_MAPPING", None, src_size, None,
-                          "path_map.yaml 中无匹配的 source 前缀。请添加 mapping 后重试。")
-        if not dry_run:
-            log_action(rec)
-        return rec
+    # v0.5 增量跳过(v0.2 默认走增量)
+    if incremental and is_already_ingested(src_path, log_records):
+        return make_record(src_path, log_records[str(src_path)].get("target_rel_path"),
+                          "SKIPPED_INCREMENTAL", "v0.5-incremental",
+                          src_size, None, "已 ingest 且未变(size+mtime 一致),增量跳过")
 
-    # 2. 推 G14 前缀(--prefix-override 优先级最高,绕过 prefix_rules)
-    if prefix_override is not None:
-        prefix = prefix_override
-        rule_note = f"override:{prefix_override}"
-    else:
-        prefix, rule_note = infer_prefix(src_path.name, ext, rules)
-        if prefix is None:
-            # v0.3 fallback:IMAGE/VIDEO 用内置默认前缀(vision 类文件,
-            # 不污染 path_map.yaml 的 G14 prefix 表)
-            if ext in IMAGE_EXTS:
-                prefix = "图-"
-                rule_note = "v0.3-default-image"
-            elif ext in VIDEO_EXTS:
-                prefix = "视频-"
-                rule_note = "v0.3-default-video"
-            else:
-                rec = make_record(src_path, None, "ERROR_NO_PREFIX", "G14", src_size, None,
-                                  f"prefix_rules 中无 {ext} 类的规则,或该类规则无 default。请补充后重试。")
-                if not dry_run:
-                    log_action(rec)
-                return rec
-
-    # 3. 拼最终路径
-    scene = target_subdir.split("/")[0]
-    target_dir = CORPUS / target_subdir
-    prefixed_name = f"{prefix}{src_path.name}"
+    target_dir = _build_target_dir(item)
+    prefixed_name = item["target_filename"]
     target_src = target_dir / prefixed_name
     target_rel = norm_path(target_src.relative_to(REPO))
+    scene = _scene_label(item)
+    frontmatter = item.get("frontmatter") or {}
 
-    # 4. 同名冲突检查
+    # 同名冲突
     if target_src.exists():
         if files_equal(src_path, target_src):
-            rec = make_record(src_path, target_rel, "SKIPPED_DUP", f"G14({prefix})",
+            rec = make_record(src_path, target_rel, "SKIPPED_DUP", "v0.2-plan-routed",
                               src_size, target_src.stat().st_size, "字节 + mtime 一致,跳过")
             if not dry_run:
                 log_action(rec)
             return rec
-        # 不同 → 报错停;附带同基线族上下文(辅助 G9 人工判定)
-        tgt_stat = target_src.stat()
-        family, baseline = find_baseline_family(target_dir, prefix, src_path.name)
-        notes = (
-            f"目标已存在但内容不同。src 字节={src_size} mtime={int(src_stat.st_mtime)};"
-            f"tgt 字节={tgt_stat.st_size} mtime={int(tgt_stat.st_mtime)}。"
-            f"走 G3-G9 人工判定。"
-        )
-        if len(family) >= 3:
-            notes += f"\n  ⚠ 同基线族 (≥3 份,基线='{prefix}{baseline}*',可能触发 G9,建议人工走 G9 判定):"
-            for fname, fsize, fmt in family:
-                notes += f"\n    - {fname} ({fsize:,} B, {fmt})"
-        rec = make_record(
-            src_path, target_rel, "ERROR_VERSION_CONFLICT", f"G14({prefix})",
-            src_size, tgt_stat.st_size, notes,
-        )
+        rec = make_record(src_path, target_rel, "ERROR_TARGET_CONFLICT", "v0.2-plan-routed",
+                          src_size, target_src.stat().st_size,
+                          f"target 已存在但内容不同;plan 应给新的 target_filename 消歧(如加项目前缀)。")
         if not dry_run:
             log_action(rec)
         return rec
 
-    # 4.5 G2 超大文件守门(>50MB 全跳过 cp + 全做 stub,沿用 tests/查询记录.md G2 规则)
+    # G2 超大守门
     if src_size > 50 * 1024 * 1024:
         if dry_run:
-            return make_record(src_path, target_rel, "DRY_RUN_G2", f"G14({prefix})+G2",
-                               src_size, None, f"[dry-run] G2 超大文件 {src_size/1024/1024:.1f} MB > 50 MB,仅做 stub")
+            return make_record(src_path, target_rel, "DRY_RUN_G2", "v0.2-plan-routed+G2",
+                               src_size, None, f"[dry-run] G2 超大 {src_size/1024/1024:.1f} MB")
         target_dir.mkdir(parents=True, exist_ok=True)
         stub_path = target_dir / f"{prefixed_name}.stub.md"
         stub_path.write_text(
-            make_stub(src_path, scene, "G2",
-                     source_abs_path=str(src_path), prefixed_name=prefixed_name),
+            make_stub(src_path, scene, "G2", source_abs_path=str(src_path), prefixed_name=prefixed_name),
             encoding="utf-8")
+        if frontmatter:
+            inject_frontmatter(stub_path, frontmatter)
         rec = make_record(src_path, norm_path(stub_path.relative_to(REPO)),
                           "STUB_ONLY_G2", "G2", src_size, stub_path.stat().st_size,
-                          f"G2 超大文件 {src_size/1024/1024:.1f} MB > 50 MB,跳过 cp + stub 化")
+                          f"G2 超大 {src_size/1024/1024:.1f} MB,跳过 cp + stub 化")
         log_action(rec)
         return rec
 
-    # 5. binary 转 md(G15/G16/G18 分流);6. text 直接 cp
+    # v0.2 阶段 4 步骤 4.3:vsdx 走 LibreOffice headless → PDF → 再走现有 binary 路径
+    # LibreOffice 不可用时永久 stub 标 failed_no_libreoffice(plan §7.3 步骤 4.3 降级路径)
+    if ext == VSDX_EXT:
+        if dry_run:
+            return make_record(src_path, target_rel, "DRY_RUN_VSDX", "v0.2-plan-routed+vsdx",
+                               src_size, None, "[dry-run] vsdx → LibreOffice 转 PDF → 现有 binary 分流")
+        target_dir.mkdir(parents=True, exist_ok=True)
+        vsdx_status, pdf_path = process_vsdx_to_pdf(src_path, target_dir)
+        if vsdx_status == "failed_no_libreoffice":
+            stub_path = target_dir / f"{prefixed_name}.stub.md"
+            stub_path.write_text(
+                make_stub(src_path, scene, "G15",
+                          source_abs_path=str(src_path), prefixed_name=prefixed_name),
+                encoding="utf-8")
+            # 在 stub 末尾追加 vsdx 降级原因(沿用 .pptx vision_assets 字段的"软扩展"思路,改写 status 标签)
+            stub_extra = (f"\n- vsdx_status: failed_no_libreoffice\n"
+                         f"- 降级原因: LibreOffice (soffice) 未安装,无法把 .vsdx 转 PDF;走永久 stub 不入正文\n"
+                         f"- 修复方案: 装 LibreOffice 后重跑 ingest(plan §7.3 步骤 4.3)\n")
+            with open(stub_path, "a", encoding="utf-8") as f:
+                f.write(stub_extra)
+            shutil.copy2(src_path, target_src)
+            if frontmatter:
+                inject_frontmatter(stub_path, frontmatter)
+            rec = make_record(src_path, norm_path(stub_path.relative_to(REPO)),
+                              "STUB_ONLY_VSDX_NO_LIBREOFFICE", "vsdx+G15",
+                              src_size, stub_path.stat().st_size,
+                              "vsdx 降级:LibreOffice 不可用,永久 stub")
+            log_action(rec)
+            return rec
+        if vsdx_status == "failed_convert":
+            rec = make_record(src_path, target_rel, "ERROR_VSDX_CONVERT_FAILED", "vsdx",
+                              src_size, None, "vsdx 转 PDF 失败(LibreOffice 可用但转换报错)")
+            log_action(rec)
+            return rec
+        # success:用 PDF 路径接 markitdown 现有 binary 分流;原 .vsdx 也 cp 到 target_src
+        shutil.copy2(src_path, target_src)
+        md_engine = get_md_engine(md_engine_holder)
+        try:
+            result = md_engine.convert(str(pdf_path))
+            md_text = result.text_content or ""
+        except Exception as e:
+            rec = make_record(src_path, target_rel, "ERROR_MARKITDOWN_FAILED", "vsdx+G15/G16",
+                              src_size, None, f"vsdx 转 PDF 成功但 markitdown 异常: {e}")
+            log_action(rec)
+            return rec
+        char_count = len(md_text)
+        density = char_count / src_size if src_size > 0 else 0.0
+        if char_count == 0:
+            stub_path = target_dir / f"{prefixed_name}.stub.md"
+            stub_path.write_text(
+                make_stub(src_path, scene, "G15",
+                          source_abs_path=str(src_path), prefixed_name=prefixed_name),
+                encoding="utf-8")
+            if frontmatter:
+                inject_frontmatter(stub_path, frontmatter)
+            rec = make_record(src_path, norm_path(stub_path.relative_to(REPO)),
+                              "STUB_ONLY_G15_VSDX_BLIND", "vsdx+G15", src_size, stub_path.stat().st_size,
+                              "vsdx 转 PDF 后 markitdown 0 字节,永久 stub")
+            log_action(rec)
+            return rec
+        md_path = target_dir / f"{prefixed_name}.md"
+        stub_path = target_dir / f"{prefixed_name}.stub.md"
+        md_path.write_text(md_text, encoding="utf-8")
+        stub_path.write_text(
+            make_stub(src_path, scene, "G16", density,
+                      source_abs_path=str(src_path), prefixed_name=prefixed_name),
+            encoding="utf-8")
+        fm_status = "skipped"
+        if frontmatter:
+            fm_status = inject_frontmatter(md_path, frontmatter)
+        # 清理临时 PDF(中间产物,不入库)
+        try:
+            pdf_path.unlink()
+        except OSError:
+            pass
+        rec = make_record(src_path, norm_path(md_path.relative_to(REPO)),
+                          "INGESTED_MD", "vsdx+G16", src_size, md_path.stat().st_size,
+                          f"vsdx 转 PDF + markitdown,三件共存,密度 {density:.1%},frontmatter={fm_status}",
+                          char_density=density)
+        log_action(rec)
+        return rec
+
+    # binary 转 markdown(G15/G16/G18 分流)
     if ext in BINARY_EXTS:
         if dry_run:
-            return make_record(
-                src_path, target_rel, "DRY_RUN_BINARY", f"G14({prefix})+G15/G16/G18(实际转换时定)",
-                src_size, None,
-                f"[dry-run] markitdown 转 .md,按字符密度走 G15/G16/G18 分流;源 + stub + .md(若 G16)三件落 {target_dir.relative_to(REPO).as_posix()}/",
-            )
+            return make_record(src_path, target_rel, "DRY_RUN_BINARY", "v0.2-plan-routed",
+                               src_size, None, f"[dry-run] markitdown → G15/G16/G18 分流")
         md_engine = get_md_engine(md_engine_holder)
+        # v0.2 阶段 4 步骤 4.4:.odt/.ods/.odp markitdown 异常时降级 G15 永久 stub
+        # (plan §7.3 步骤 4.4 "失败则降级 G15 永久 stub" 语义;其他 binary 类型保持 ERROR_MARKITDOWN_FAILED)
+        ODF_EXTS = {".odt", ".ods", ".odp"}
         try:
             result = md_engine.convert(str(src_path))
             md_text = result.text_content or ""
         except Exception as e:
-            rec = make_record(src_path, target_rel, "ERROR_MARKITDOWN_FAILED", f"G14({prefix})",
+            if ext in ODF_EXTS:
+                target_dir.mkdir(parents=True, exist_ok=True)
+                stub_path = target_dir / f"{prefixed_name}.stub.md"
+                stub_path.write_text(
+                    make_stub(src_path, scene, "G15",
+                              source_abs_path=str(src_path), prefixed_name=prefixed_name),
+                    encoding="utf-8")
+                stub_extra = (f"\n- odf_status: failed_markitdown_no_odf_converter\n"
+                             f"- 降级原因: markitdown 当前版本未带 ODF converter(.odt/.ods/.odp);永久 stub\n"
+                             f"- 修复方案: 装 markitdown 的 odf extra(若未来版本提供)或装 odfpy + 自行扩展 converter\n"
+                             f"- markitdown 异常: {e}\n")
+                with open(stub_path, "a", encoding="utf-8") as f:
+                    f.write(stub_extra)
+                shutil.copy2(src_path, target_src)
+                if frontmatter:
+                    inject_frontmatter(stub_path, frontmatter)
+                rec = make_record(src_path, norm_path(stub_path.relative_to(REPO)),
+                                  "STUB_ONLY_ODF_NO_CONVERTER", "odf+G15",
+                                  src_size, stub_path.stat().st_size,
+                                  "odf 降级:markitdown 未带 ODF converter,永久 stub")
+                log_action(rec)
+                return rec
+            rec = make_record(src_path, target_rel, "ERROR_MARKITDOWN_FAILED", "v0.2-plan-routed",
                               src_size, None, f"markitdown 异常: {e}")
             log_action(rec)
             return rec
@@ -488,75 +736,109 @@ def process_file(src_abs, mappings, rules, dry_run, md_engine_holder, prefix_ove
         density = char_count / src_size if src_size > 0 else 0.0
         target_dir.mkdir(parents=True, exist_ok=True)
 
-        # 0 字节 → G15
         if char_count == 0:
             stub_path = target_dir / f"{prefixed_name}.stub.md"
             stub_path.write_text(
-                make_stub(src_path, scene, "G15",
-                          source_abs_path=str(src_path), prefixed_name=prefixed_name),
+                make_stub(src_path, scene, "G15", source_abs_path=str(src_path), prefixed_name=prefixed_name),
                 encoding="utf-8")
             shutil.copy2(src_path, target_src)
+            if frontmatter:
+                inject_frontmatter(stub_path, frontmatter)
             rec = make_record(src_path, norm_path(stub_path.relative_to(REPO)),
                               "STUB_ONLY_G15", "G15", src_size, stub_path.stat().st_size,
-                              "扫描类:markitdown 0 字节,永久 stub,不入 .md", char_density=density)
+                              "扫描类:markitdown 0 字节,永久 stub", char_density=density)
             log_action(rec)
             return rec
 
-        # 双条件 G18(R4-A 结构性稀薄):密度 < 5% AND 字符数 < 2000
         if density < DENSITY_THRESHOLD and char_count < CHAR_COUNT_THRESHOLD:
-            # v0.3+ pptx 自动解嵌入图(其他 binary 类型不解,本小阶段约束)
             va_status, va_paths, va_raw = (extract_pptx_assets(src_path, target_dir)
                                            if ext == ".pptx" else (None, None, None))
             stub_path = target_dir / f"{prefixed_name}.stub.md"
             stub_path.write_text(
                 make_stub(src_path, scene, "G18", density, char_count,
                           source_abs_path=str(src_path), prefixed_name=prefixed_name,
-                          vision_assets=va_paths,
-                          vision_assets_extraction=va_status,
+                          vision_assets=va_paths, vision_assets_extraction=va_status,
                           vision_assets_raw_count=va_raw),
                 encoding="utf-8")
             shutil.copy2(src_path, target_src)
+            if frontmatter:
+                inject_frontmatter(stub_path, frontmatter)
             rec = make_record(src_path, norm_path(stub_path.relative_to(REPO)),
                               "STUB_ONLY_G18", "G18", src_size, stub_path.stat().st_size,
-                              f"R4-A 结构性稀薄:密度 {density:.1%} < 5% 且字符数 {char_count} < 2000,永久 stub,不入 .md",
-                              char_density=density)
+                              f"R4-A 结构性稀薄 密度 {density:.1%} 字符 {char_count}", char_density=density)
             log_action(rec)
             return rec
 
-        # 其余 → G16(三件共存:源 + stub + .md)
-        # 包括两类:① 密度 ≥ 5% 正常文本主导;② 密度 < 5% 但字符数 ≥ 2000(R4-B 衰减性稀薄,如带覆层的 PDF)
+        # G16 三件共存
         md_path = target_dir / f"{prefixed_name}.md"
         stub_path = target_dir / f"{prefixed_name}.stub.md"
         md_path.write_text(md_text, encoding="utf-8")
+
+        # v0.2 阶段 4 步骤 4.2:.docx 嵌入表用 python-docx 抽取,append 到 .md 末尾作为补充段
+        # (markitdown 转 .docx 表格常出空骨架行 + 合并单元格错位,python-docx 抽取更稳;
+        #  两份共存让 LLM 检索时多一个命中)
+        docx_tables = extract_docx_tables(src_path) if ext == ".docx" else []
+        if docx_tables:
+            with open(md_path, "a", encoding="utf-8") as f:
+                f.write("\n\n## 嵌入表(python-docx 抽取版本)\n\n")
+                f.write("> 由 ingest 阶段 4 步骤 4.2 自动抽取;若 markitdown 转出的同表已正常,本段可作 2nd 视角校对。\n\n")
+                for i, t in enumerate(docx_tables, 1):
+                    f.write(f"### 表 {i}\n\n{t}\n\n")
+
+        # v0.2 阶段 4 步骤 4.1:.docx 嵌入图三闸过滤 + vision 注入占位段
+        # (Claude 对话层后续 Read 解出的图 + Edit 替换占位段为真实 vision 转写;转完即删 .assets/)
+        va_status, va_paths, va_raw = (extract_docx_assets(src_path, target_dir)
+                                        if ext == ".docx" else (None, None, None))
+        if va_status == "success" and va_paths:
+            with open(md_path, "a", encoding="utf-8") as f:
+                f.write("\n\n## 嵌入图 vision 转写\n\n")
+                f.write(f"> **vision-pending**(ingest 阶段 4 步骤 4.1 标记)。三闸过滤后保留 {len(va_paths)} 张图;原 .docx 嵌入图共 {va_raw} 张。\n")
+                f.write("> Claude 对话层后续 Read 下方各 asset → Edit 本段替换为真实转写;**不单建 .vision.md**(plan §7.3 假设 6)。\n>\n")
+                f.write("> 待转 asset 清单:\n")
+                for p in va_paths:
+                    f.write(f"> - `{p}`\n")
+                f.write("\n_本段在 Claude vision 注入后会被替换为真实的图描述 / OCR / 关系流向;.assets/ 目录在 vision 完成后自动删除。_\n")
+
         stub_path.write_text(
             make_stub(src_path, scene, "G16", density,
-                      source_abs_path=str(src_path), prefixed_name=prefixed_name),
+                      source_abs_path=str(src_path), prefixed_name=prefixed_name,
+                      vision_assets=va_paths, vision_assets_extraction=va_status,
+                      vision_assets_raw_count=va_raw),
             encoding="utf-8")
         shutil.copy2(src_path, target_src)
+        # v0.2 frontmatter 注入到 .md 正文(stub 不注入 — stub 自身已有元数据头)
+        fm_status = "skipped"
+        if frontmatter:
+            fm_status = inject_frontmatter(md_path, frontmatter)
         rec = make_record(src_path, norm_path(md_path.relative_to(REPO)),
                           "INGESTED_MD", "G16", src_size, md_path.stat().st_size,
-                          f"三件共存:源 + stub + .md,字符密度 {density:.1%}",
+                          f"三件共存,密度 {density:.1%},frontmatter={fm_status}"
+                          f"{f',嵌入表 {len(docx_tables)} 个' if docx_tables else ''}"
+                          f"{f',嵌入图 {len(va_paths)} 张(原 {va_raw})' if va_paths else ''}",
                           char_density=density)
         log_action(rec)
         return rec
 
+    # text 类直接 cp + frontmatter(若 .md)
     if ext in TEXT_EXTS:
         if dry_run:
-            return make_record(src_path, target_rel, "DRY_RUN_TEXT", f"G14({prefix})",
-                               src_size, None, f"[dry-run] 文本类直接 cp 到 {target_rel}")
+            return make_record(src_path, target_rel, "DRY_RUN_TEXT", "v0.2-plan-routed",
+                               src_size, None, f"[dry-run] 文本类直接 cp")
         target_dir.mkdir(parents=True, exist_ok=True)
         shutil.copy2(src_path, target_src)
-        rec = make_record(src_path, target_rel, "INGESTED_TEXT", f"G14({prefix})",
-                          src_size, target_src.stat().st_size, "文本类直接 cp")
+        fm_status = "skipped"
+        if ext == ".md" and frontmatter:
+            fm_status = inject_frontmatter(target_src, frontmatter)
+        rec = make_record(src_path, target_rel, "INGESTED_TEXT", "v0.2-plan-routed",
+                          src_size, target_src.stat().st_size, f"文本类直接 cp,frontmatter={fm_status}")
         log_action(rec)
         return rec
 
-    # v0.3 路径 A:纯图像类 → cp + 写 vision-pending stub(无 .md 正文)
+    # 图像类:cp + vision-pending stub
     if ext in IMAGE_EXTS:
         if dry_run:
-            return make_record(src_path, target_rel, "DRY_RUN_VISION_IMAGE", f"G14({prefix})+V_PENDING_IMAGE",
-                               src_size, None,
-                               f"[dry-run] 纯图像 → 写 vision-pending stub,源 + stub 二件落 {target_dir.relative_to(REPO).as_posix()}/;待 vision 转写")
+            return make_record(src_path, target_rel, "DRY_RUN_VISION_IMAGE", "v0.2-plan-routed",
+                               src_size, None, "[dry-run] 纯图像 → vision-pending stub")
         target_dir.mkdir(parents=True, exist_ok=True)
         stub_path = target_dir / f"{prefixed_name}.stub.md"
         stub_path.write_text(
@@ -564,18 +846,19 @@ def process_file(src_abs, mappings, rules, dry_run, md_engine_holder, prefix_ove
                       source_abs_path=str(src_path), prefixed_name=prefixed_name),
             encoding="utf-8")
         shutil.copy2(src_path, target_src)
+        if frontmatter:
+            inject_frontmatter(stub_path, frontmatter)
         rec = make_record(src_path, norm_path(stub_path.relative_to(REPO)),
                           "VISION_PENDING_IMAGE", "V_PENDING_IMAGE", src_size, stub_path.stat().st_size,
-                          "纯图像:vision 待转,source + stub 二件共存,vision 完成后同目录生成 .vision.md")
+                          "纯图像:vision 待转,源 + stub 二件共存")
         log_action(rec)
         return rec
 
-    # v0.3 路径 B:视频类 → cp + 写 vision-pending stub(无 .md 正文,待 ffmpeg 抽帧)
+    # 视频:cp + vision-pending stub
     if ext in VIDEO_EXTS:
         if dry_run:
-            return make_record(src_path, target_rel, "DRY_RUN_VISION_VIDEO", f"G14({prefix})+V_PENDING_VIDEO",
-                               src_size, None,
-                               f"[dry-run] 视频 → 写 vision-pending stub,源 + stub 二件落 {target_dir.relative_to(REPO).as_posix()}/;待 ffmpeg 抽帧 + vision 转写")
+            return make_record(src_path, target_rel, "DRY_RUN_VISION_VIDEO", "v0.2-plan-routed",
+                               src_size, None, "[dry-run] 视频 → vision-pending stub")
         target_dir.mkdir(parents=True, exist_ok=True)
         stub_path = target_dir / f"{prefixed_name}.stub.md"
         stub_path.write_text(
@@ -583,194 +866,102 @@ def process_file(src_abs, mappings, rules, dry_run, md_engine_holder, prefix_ove
                       source_abs_path=str(src_path), prefixed_name=prefixed_name),
             encoding="utf-8")
         shutil.copy2(src_path, target_src)
+        if frontmatter:
+            inject_frontmatter(stub_path, frontmatter)
         rec = make_record(src_path, norm_path(stub_path.relative_to(REPO)),
                           "VISION_PENDING_VIDEO", "V_PENDING_VIDEO", src_size, stub_path.stat().st_size,
-                          "视频:vision 待转(ffmpeg 抽帧 + 逐帧 vision),source + stub 二件共存")
+                          "视频:vision 待转,源 + stub 二件共存")
         log_action(rec)
         return rec
 
-    # 不支持的扩展名
     rec = make_record(src_path, None, "ERROR_UNSUPPORTED_EXT", None, src_size, None,
-                      f"不支持的扩展名 {ext}。BINARY={sorted(BINARY_EXTS)} TEXT={sorted(TEXT_EXTS)} "
-                      f"IMAGE={sorted(IMAGE_EXTS)} VIDEO={sorted(VIDEO_EXTS)}")
+                      f"不支持的扩展名 {ext}")
     if not dry_run:
         log_action(rec)
     return rec
 
 
-def gather_files(path):
-    p = Path(path)
-    if p.is_file():
-        return [p.resolve()]
-    if p.is_dir():
-        return sorted(f.resolve() for f in p.rglob("*") if f.is_file())
-    sys.stderr.write(f"ERROR: 路径不存在或不是文件/目录 {path}\n")
-    sys.exit(2)
+def execute_plan(plan_file: Path, dry_run: bool = False) -> dict:
+    """v0.2 步骤 2.3:按 AI 给的 routing_plan.json 执行迁移。"""
+    if not plan_file.is_file():
+        sys.stderr.write(f"ERROR: plan 文件不存在 {plan_file}\n")
+        sys.exit(2)
+    plan = json.loads(plan_file.read_text(encoding="utf-8"))
+    items = plan.get("items", [])
+    if not items:
+        sys.stderr.write(f"ERROR: plan 中没有 items\n")
+        sys.exit(2)
+
+    required = {"src_abs", "target_bucket", "target_filename"}
+    for i, it in enumerate(items):
+        missing = required - set(it.keys())
+        if missing:
+            sys.stderr.write(f"ERROR: items[{i}] 缺字段 {missing}\n")
+            sys.exit(2)
+        if it["target_bucket"] == "01-projects" and not it.get("target_project"):
+            sys.stderr.write(f"ERROR: items[{i}] bucket=01-projects 但缺 target_project\n")
+            sys.exit(2)
+
+    md_engine_holder = [None]
+    log_records = load_ingest_log()
+    results = []
+    print(f"# execute-plan: {len(items)} items {'(DRY-RUN)' if dry_run else ''}")
+    print(f"# AI 判断摘要: {plan.get('ai_judgment_summary', '(未提供)')}")
+    if not dry_run:
+        print(f"# log: {INGEST_LOG.relative_to(REPO).as_posix()}")
+
+    for i, item in enumerate(items, 1):
+        rec = process_file_with_explicit_target(item, dry_run, md_engine_holder,
+                                                 incremental=True, log_records=log_records)
+        results.append(rec)
+        action = rec["action"]
+        name = Path(rec["source_abs_path"]).name
+        print(f"[{i}/{len(items)}] {action}: {name}")
+        if rec.get("target_rel_path"):
+            print(f"    → {rec['target_rel_path']}")
+        if rec.get("notes"):
+            print(f"    notes: {rec['notes']}")
+
+    # 汇总
+    stats = defaultdict(int)
+    for r in results:
+        stats[r["action"]] += 1
+    print()
+    print(f"# ✅ 完成: " + " / ".join(f"{a}={n}" for a, n in sorted(stats.items())))
+
+    if not dry_run:
+        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+        exec_log = REPO / "logs" / f"ingest_executed_{ts}.jsonl"
+        exec_log.parent.mkdir(parents=True, exist_ok=True)
+        with open(exec_log, "w", encoding="utf-8") as f:
+            for r in results:
+                f.write(json.dumps(r, ensure_ascii=False) + "\n")
+        print(f"# 执行明细: {exec_log.relative_to(REPO)}")
+
+    return {"items": results, "stats": dict(stats)}
 
 
-def print_record(i, total, rec):
-    action = rec["action"]
-    name = Path(rec["source_abs_path"]).name
-    print(f"[{i}/{total}] {action}: {name}")
-    if rec.get("target_rel_path"):
-        print(f"    → {rec['target_rel_path']}")
-    if rec.get("rule_applied"):
-        print(f"    rule: {rec['rule_applied']}")
-    if rec.get("char_density") is not None:
-        print(f"    char_density: {rec['char_density']:.1%}")
-    if rec.get("notes"):
-        print(f"    notes: {rec['notes']}")
+# ====================== main: 子命令分发 ======================
 
 
 def main():
-    ap = argparse.ArgumentParser(description="knowledge-base ingest pipeline (v0.5 增量 ingest)")
-    ap.add_argument("path", nargs="?", default=None,
-                    help="单文件或目录(递归);不传则全量扫整个 corpus 根目录")
-    ap.add_argument("--dry-run", action="store_true", help="仅打印将要执行的动作,不写盘")
-    ap.add_argument("--full", action="store_true",
-                    help="v0.5:强制全量(opt-out)。默认行为:传 path 走增量(跳过已 ingest 且未变);不传 path 走全量")
-    ap.add_argument("--prefix-override", default=None,
-                    help="跨项目参考素材(J5 类)用,如 --prefix-override 参考-。绕过 prefix_rules 推断,优先级最高")
-    args = ap.parse_args()
-    # v0.5 默认行为:path 缺省 → 全量(扫 corpus 根);path 给定 → 增量(--full 可覆盖为全量)
-    if args.path is None:
-        actual_path = str(CORPUS)
-        incremental = False
-    else:
-        actual_path = args.path
-        incremental = not args.full
+    parser = argparse.ArgumentParser(description="knowledge-base ingest pipeline (v0.2 AI 语义路由)")
+    sub = parser.add_subparsers(dest="mode", required=True)
 
-    mappings, rules = load_config()
-    if not mappings:
-        print("⚠ path_map.yaml 中没有 active 的 path_mappings")
-        print()
-        print("请先编辑仓库根的 path_map.yaml,做以下两步:")
-        print("  1. 找到你想用的占位条目(默认 4 条都注释掉了)")
-        print("  2. 去掉这条的行首 # 字符,把 source 改成你本机的项目目录绝对路径")
-        print()
-        print("详见 docs/试用指南.md 的「最简配置示例(3 行改路径)」段。")
-        sys.exit(2)
-    files = gather_files(actual_path)
-    md_engine_holder = [None]
-    # v0.5 增量过滤:只在 incremental 模式下生效,过滤已 ingest 且未变的文件
-    incremental_skipped_count = 0
-    if incremental:
-        log_records = load_ingest_log()
-        new_files = [f for f in files if not is_already_ingested(f, log_records)]
-        incremental_skipped_count = len(files) - len(new_files)
-        files = new_files
+    scan_p = sub.add_parser("scan-only", help="扫源目录,输出 routing_request.json,不做路由判断")
+    scan_p.add_argument("src_dir", type=Path)
+    scan_p.add_argument("--output", type=Path, default=REPO / "logs" / "routing_request.json")
 
-    mode_label = "全量" if not incremental else f"增量(跳过 {incremental_skipped_count} 个已入库且未变)"
-    print(f"# ingest.py {'(DRY-RUN) ' if args.dry_run else ''}模式: {mode_label}")
-    print(f"- 输入: {actual_path} ({len(files)} 个文件待处理)")
-    print(f"- path_map.yaml: {len(mappings)} 条 mappings, {len(rules)} 类前缀规则")
-    if args.prefix_override:
-        print(f"- ⚠ --prefix-override='{args.prefix_override}' 启用,绕过 prefix_rules 推断")
-    if not args.dry_run:
-        print(f"- log: {INGEST_LOG.relative_to(REPO).as_posix()}")
-    print()
+    exec_p = sub.add_parser("execute-plan", help="按 AI 给的 routing_plan.json 执行迁移 + frontmatter 注入")
+    exec_p.add_argument("plan_file", type=Path)
+    exec_p.add_argument("--dry-run", action="store_true")
 
-    all_records = []
-    for i, src in enumerate(files, 1):
-        rec = process_file(src, mappings, rules, args.dry_run, md_engine_holder, args.prefix_override)
-        print_record(i, len(files), rec)
-        all_records.append(rec)
+    args = parser.parse_args()
 
-    # 汇总:按 action 分组打印 ERROR_*,落盘跳过清单(非 dry-run 才落盘)
-    errors = [r for r in all_records if r["action"].startswith("ERROR_")]
-    non_errors = [r for r in all_records if not r["action"].startswith("ERROR_")]
-    temp_skips = [r for r in all_records if r["action"] == "SKIPPED_TEMP"]
-
-    print()
-    if temp_skips:
-        print(f"# ℹ 已跳过 {len(temp_skips)} 个临时/隐藏文件(Office 锁文件 / 系统隐藏文件 / .tmp 等,不算错误)")
-        for r in temp_skips[:3]:
-            print(f"    示例: {Path(r['source_abs_path']).name} —— {r.get('notes', '')}")
-        if len(temp_skips) > 3:
-            print(f"    ... (共 {len(temp_skips)} 个)")
-        print()
-
-    if errors:
-        skip_file_rel = None
-        if not args.dry_run:
-            ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-            skip_file = REPO / "logs" / f"ingest_skipped_{ts}.txt"
-            skip_file.parent.mkdir(parents=True, exist_ok=True)
-            with open(skip_file, "w", encoding="utf-8") as f:
-                for r in errors:
-                    f.write(f"{r['source_abs_path']}\t{r['action']}\t{r.get('notes', '')}\n")
-            skip_file_rel = skip_file.relative_to(REPO).as_posix()
-
-        suffix = f"(完整清单见 {skip_file_rel})" if skip_file_rel else "(dry-run, 未落盘清单)"
-        print(f"# ⚠ 跳过 {len(errors)} 个文件 {suffix}")
-        reason_map = {
-            "ERROR_NO_MAPPING": "path_map.yaml 中无匹配 source",
-            "ERROR_NO_PREFIX": "该扩展名无前缀规则",
-            "ERROR_VERSION_CONFLICT": "目标已存在但内容不同(需走 G3-G9 人工判定)",
-            "ERROR_MARKITDOWN_FAILED": "markitdown 转换异常",
-            "ERROR_UNSUPPORTED_EXT": "不支持的扩展名",
-        }
-        by_action = defaultdict(list)
-        for r in errors:
-            by_action[r["action"]].append(r)
-        for action in sorted(by_action.keys()):
-            recs = by_action[action]
-            reason = reason_map.get(action, "未分类")
-            print(f"  - {action}: {len(recs)} 个(原因:{reason})")
-            for r in recs[:3]:
-                print(f"    示例: {Path(r['source_abs_path']).name}")
-            if len(recs) > 3:
-                print(f"    ... (共 {len(recs)} 个,完整清单见跳过文件)")
-        print()
-
-    # v0.3 vision_pending 汇总:G15(扫描 PDF) / G18(结构性稀薄,常为图为主 PPT) /
-    # VISION_PENDING_IMAGE / VISION_PENDING_VIDEO,共 4 类待 vision 转写
-    vision_pending_actions = {
-        "STUB_ONLY_G15": ("扫描类 PDF (G15)", "Read 工具读 PDF;若文本层为空降级为分页 PNG 序列"),
-        "STUB_ONLY_G18": ("结构性稀薄文档 (G18,常为图为主 PPT)", "需导出为 PDF/PNG 序列后再走 vision"),
-        "VISION_PENDING_IMAGE": ("纯图像 (路径 A)", "Read 工具直接读图"),
-        "VISION_PENDING_VIDEO": ("视频 (路径 B)", "需 ffmpeg 抽帧后逐帧 vision"),
-    }
-    vision_pending = [r for r in all_records if r["action"] in vision_pending_actions]
-    if vision_pending:
-        pending_file_rel = None
-        if not args.dry_run:
-            ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-            pending_file = REPO / "logs" / f"vision_pending_{ts}.txt"
-            pending_file.parent.mkdir(parents=True, exist_ok=True)
-            with open(pending_file, "w", encoding="utf-8") as f:
-                for r in vision_pending:
-                    desc, hint = vision_pending_actions[r["action"]]
-                    f.write(f"{r['source_abs_path']}\t{r['action']}\t{desc}\t{hint}\n")
-            pending_file_rel = pending_file.relative_to(REPO).as_posix()
-
-        suffix = f"(完整清单见 {pending_file_rel})" if pending_file_rel else "(dry-run, 未落盘清单)"
-        print(f"# 👁 vision 待转 {len(vision_pending)} 个文件 {suffix}")
-        by_action = defaultdict(list)
-        for r in vision_pending:
-            by_action[r["action"]].append(r)
-        for action in sorted(by_action.keys()):
-            recs = by_action[action]
-            desc, hint = vision_pending_actions[action]
-            print(f"  - {action}: {len(recs)} 个 — {desc}")
-            print(f"    处置提示: {hint}")
-            for r in recs[:3]:
-                print(f"    示例: {Path(r['source_abs_path']).name}")
-            if len(recs) > 3:
-                print(f"    ... (共 {len(recs)} 个,完整清单见 vision_pending 文件)")
-        print(f"  ⓘ Claude Code 对话层会读取该清单 + 询问用户(Y/N/行号筛选/类型筛选),触发 vision 转写")
-        print()
-
-    real_count = len(non_errors) - len(temp_skips)
-    inc_seg = f" / 跳过-增量 {incremental_skipped_count} 个" if incremental else ""
-    print(f"# ✅ 完成: 入库/跳过-重复 {real_count} 个 / 跳过-临时 {len(temp_skips)} 个 / 跳过-错误 {len(errors)} 个"
-          f"{inc_seg}"
-          f" / vision 待转 {len(vision_pending)} 个"
-          f"{' (dry-run, 无写盘)' if args.dry_run else ''}")
-
-    # 退出码:全部为 ERROR 且无任何正常动作 → exit 1(显式让 caller 感知问题);否则 exit 0
-    if errors and not non_errors:
-        sys.exit(1)
+    if args.mode == "scan-only":
+        scan_and_write_request(args.src_dir, args.output)
+    elif args.mode == "execute-plan":
+        execute_plan(args.plan_file, dry_run=args.dry_run)
 
 
 if __name__ == "__main__":

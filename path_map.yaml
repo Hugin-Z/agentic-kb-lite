@@ -1,74 +1,70 @@
-# path_map.yaml — knowledge-base 试用版配置模板
+# path_map.yaml — v0.2 schema(AI 语义路由,非规则匹配表)
 #
-# 由 scripts/ingest.py 读取。试用前按以下步骤填写:
-#   1. 取消下方 path_mappings 中需要用的占位条目的注释(去掉行首 #)
-#   2. source 改为你本机要 ingest 的项目目录绝对路径
-#   3. target 改为对应 corpus 二级目录(场景代号 + 项目名)
+# 范式切换(对照 v0.1):
+#   - v0.1:path_mappings 是"源前缀 → corpus 子目录"的规则匹配表,ingest.py 按规则机械路由
+#   - v0.2:本文件退化为"PARA bucket 语义说明 + hint 关键词 + 偏好覆盖",
+#           真实路由判断由 AI(Claude Code)在 agent loop 内基于 buckets/hint_subdir_keywords/CLAUDE.md 第 6 节做出
 #
-# 维护方法:
-#   - 每次 ingest 新目录时若报 ERROR_NO_MAPPING,在 path_mappings 加一条
-#   - 每次 ingest 遇到新扩展名报 ERROR_NO_PREFIX,在 prefix_rules 加一组
-#   - 跨项目参考素材用 --prefix-override 参考- 命令行覆盖,不需要改本文件
-#   - 修改本文件不需要重启任何东西,ingest.py 每次跑都重新读
+# 详见 docs/v0.2-plan.md §2.2 与 §4.3 步骤 1.2
 
-# === path_mappings ===
-# 源路径前缀 → corpus 目标二级目录(相对 corpus/)
-# 匹配规则:取与源文件绝对路径最长前缀匹配的一条;前缀比较时统一为 / 分隔
-# Windows 路径在 yaml 里写 / 或 \\ 都行,ingest.py 内部统一为 /
-path_mappings:
-  # --- 占位 1:历史方案 ---
-  # - source: "C:/你的项目根目录/某历史项目"
-  #   target: "01-历史方案/某历史项目"
+version: 2
 
-  # --- 占位 2:投标章节 ---
-  # - source: "C:/你的项目根目录/某投标项目"
-  #   target: "02-投标章节/某投标项目"
+# PARA bucket 语义说明(供 AI 路由参考)
+buckets:
+  01-projects:
+    semantics: "有明确客户/合同/交付物的具体工作单元,即使没有客户名和时间。识别要点:目录下有总体方案/架构设计/纪要/调研等'交付物'迹象"
+    examples: ["智慧城市可视化平台", "某客户XX系统", "数字住建二期"]
 
-  # --- 占位 3:技术决策 ---
-  # - source: "C:/你的项目根目录/某技术调研"
-  #   target: "03-技术决策/某技术调研"
+  02-areas:
+    semantics: "长期维护的责任领域,不属于单个项目。识别要点:跨项目复用的方法论、产品资料、章节模板"
+    examples: ["产品方案库", "投标章节模板", "技术方法论", "handbook"]
+    subdirs: ["产品方案库", "行业解决方案", "投标章节模板", "技术方法论"]
 
-  # --- 占位 4:个人记忆 ---
-  # - source: "C:/你的项目根目录/某专班纪要"
-  #   target: "04-个人记忆/某专班"
+  03-resources:
+    semantics: "参考资料,只参考不维护。识别要点:外部权威发布的国标行标、行业研究、竞品资料、培训资料"
+    examples: ["国标行标", "行业研究", "竞品资料", "培训与调研"]
+    subdirs: ["国标行标", "行业研究", "竞品资料", "培训与调研"]
 
-# === prefix_rules ===
-# 按扩展名分组的 G14 前缀推断(见 tests/查询记录.md G14)
-# 每组可有 keywords 列表(顺序匹配,正则 ignore-case)+ default 兜底
-# 命中第一个 keyword 的 pattern 即返回对应 prefix;全不中走 default
-prefix_rules:
-  ".html":
-    default: "原型-"
-    # 注:.html 99% 是原型文件;若未来出现 02 投标场景下纯文本 html,需加 章节- keyword
+  04-archives:
+    semantics: "已交付且后续不会再用的老项目。识别要点:目录名含'已交付/已归档/已完成'等明示;或 6 个月以上无新文件活跃"
 
-  ".pdf":
-    keywords:
-      - { pattern: "纪要|会议|会谈|讨论", prefix: "纪要-" }
-      - { pattern: "调研|访谈|摸底", prefix: "调研-" }
-      - { pattern: "询比|挂网|招标书?|采购|评分", prefix: "招标-" }
-      - { pattern: "章节|技术部分|应答|偏离表|响应文件|技术方案", prefix: "章节-" }
-    default: "方案-"
+# 特殊子目录脱钩规则(AI 路由的辅助提示,非硬规则)
+hint_subdir_keywords:
+  resources_hint:
+    - 标准
+    - 规范
+    - 国标
+    - 行标
+    - 竞品
+    - 友商
+    - 培训
+    - 行业研究
+    - 调研报告
+  areas_hint:
+    - 产品方案
+    - 产品资料
+    - 投标章节
+    - 模板
+    - 方法论
+    - handbook
+  archives_hint:
+    - 已交付
+    - 已完成
+    - 已归档
 
-  ".docx":
-    keywords:
-      - { pattern: "纪要|会议|会谈|讨论|沟通", prefix: "纪要-" }
-      - { pattern: "询比|挂网|招标书?|采购|评分", prefix: "招标-" }
-      - { pattern: "章节|技术部分|应答|偏离表|响应文件|技术方案", prefix: "章节-" }
-      - { pattern: "调研|访谈|摸底", prefix: "调研-" }
-    default: "方案-"
+# 项目内部 5 子目录约定
+project_subdirs:
+  "01-方案": "总体方案、设计文档、架构图等核心交付物"
+  "02-章节": "可独立复用的章节素材"
+  "03-纪要": "会议纪要、客户沟通"
+  "04-调研": "需求调研、客户访谈"
+  "05-附图": "架构图、流程图、截图等图片"
+  "99-其他": "兜底,AI 判断不出归属的"
 
-  ".doc":
-    keywords:
-      - { pattern: "纪要|会议", prefix: "纪要-" }
-    default: "方案-"
-
-  ".xlsx":
-    keywords:
-      - { pattern: "偏离表|应答表|响应文件", prefix: "章节-" }
-      - { pattern: "评分", prefix: "招标-" }
-    default: "方案-"
-
-  ".pptx":
-    keywords:
-      - { pattern: "纪要|汇报", prefix: "纪要-" }
-    default: "方案-"
+# 用户偏好覆盖(可选,优先级高于 AI 判断)
+# 默认空列表;有需要时取消注释下方示例并按需修改
+explicit_mappings: []
+# 示例(取消注释后生效):
+# - source: "D:/某客户合同包/"
+#   target: "02-areas/合同档案/"
+#   reason: "目录虽含项目名,但内容是合同文档,归 areas 更合适"

@@ -98,14 +98,17 @@ python3 -m venv .venv
 ./setup_system_tools.sh      # 检测 rg / ffmpeg / poppler(可选)
 ```
 
-### 3.3 配 path_map.yaml(1-2 条 source)
+### 3.3 配 path_map.yaml(v0.2 起 AI 语义路由)
 
-编辑仓库根 `path_map.yaml`,去掉占位注释,改成你本机资料目录:
+v0.2 起 **path_map.yaml 退化为语义说明 + hints + explicit_mappings 兜底**;AI 在 ingest 时自动按 [CLAUDE.md 第 6 节"PARA 路由协议"](CLAUDE.md) 判断目标位置(`01-projects/` / `02-areas/` / `03-resources/` / `04-archives/`)。**通常不需要改 path_map.yaml** — AI 看到子目录"标准/"就知道脱钩到 resources/国标行标,看到"纪要/"就知道留在项目内 03-纪要。
+
+只有 AI 判断不理想时,在 `path_map.yaml` 的 `explicit_mappings` 字段加一条用户偏好兜底:
 
 ```yaml
-path_mappings:
-  - source: "D:/我的项目资料"          # 你本机资料目录绝对路径
-    target: "01-历史方案/某项目"        # 落到 corpus/ 哪个场景子目录
+explicit_mappings:
+  - source: "D:/某客户合同包/"
+    target: "02-areas/合同档案/"
+    reason: "目录虽含项目名,但内容是合同文档,归 areas 更合适"
 ```
 
 ### 3.4 用 AI 编程助手跑一次
@@ -134,12 +137,14 @@ AI 会按 [CLAUDE.md](CLAUDE.md) 工作流跑 ingest(G14/G15/G16/G18 分流)+ ag
 确认正式入库?(y/n)
 
 [查询:我以前的某个项目是怎么做架构的?]
-[轮 1] 检索词:["系统架构", "项目方案", "技术架构"]
-[L1] rg 命中 corpus/01-历史方案/某项目-2025/方案-XX.md (line 15-42)
-[L2] 文件名扫命中 corpus/01-历史方案/2024Q3-基础架构.md
+[轮 1 状态段]
+  检索行为: 模糊探索(只主题词,无指向词)
+  默认 scope: corpus/01-projects/(命中"项目")
+[L1] rg 命中 corpus/01-projects/某项目-2025/01-方案/总体方案.md (line 15-42)
+[L2] 文件名扫命中 corpus/01-projects/某客户A-2024Q3/01-方案/基础架构设计.md
 [整合] 基于 2 份正文证据:
-- 项目 A 采用 X 架构,核心是 ...(详见 corpus/01-历史方案/...:15-42)
-- 项目 B 用了 Y 模式,因为 ...(详见 corpus/01-历史方案/2024Q3-...)
+- 项目 A 采用 X 架构,核心是 ...(详见 corpus/01-projects/某项目-2025/...:15-42)
+- 项目 B 用了 Y 模式,因为 ...(详见 corpus/01-projects/某客户A-2024Q3/...)
 
 工具调用:2 次 / 12 上限。
 ````
@@ -173,11 +178,11 @@ agentic-kb-lite/
 ├── requirements.txt                  # Python 依赖
 ├── .gitignore                        # 含 logs/ / .assets/ / .frames/ / tests 私有素材
 │
-├── corpus/                           # 素材主目录
-│   ├── 01-历史方案/                  # 项目方案 / 原型 / 技术文档
-│   ├── 02-投标章节/                  # 投标技术章节 / 招标文件
-│   ├── 03-技术决策/                  # ADR / 选型对比
-│   ├── 04-个人记忆/                  # 笔记 / 纪要 / 调研
+├── corpus/                           # 素材主目录(v0.2 起 PARA 四层)
+│   ├── 01-projects/                  # 在做的具体项目;内部 5 固定子目录(01-方案/02-章节/03-纪要/04-调研/05-附图)+ 99-其他
+│   ├── 02-areas/                     # 长期维护的责任领域(产品方案库/行业解决方案/投标章节模板/技术方法论)
+│   ├── 03-resources/                 # 参考资料(国标行标/行业研究/竞品资料/培训与调研)
+│   ├── 04-archives/                  # 已交付且不会再用的老项目(默认不在 P+A+R 全扫 scope)
 │   └── .fixtures/                    # 可跑评估场景 fixtures(开源仓 track,可复现)
 │       ├── E1_simple/                # agent loop 简单单轮
 │       ├── E2_expand/                # 0 命中扩词
@@ -186,20 +191,25 @@ agentic-kb-lite/
 │       ├── E5_degenerate/            # 无效迭代退化
 │       ├── E6_filename_only/         # 纯文件名命中(v0.6)
 │       ├── E7_filename_misleading/   # 文件名误导(v0.6)
+│       ├── E8_scope_routing/         # scope 路由(v0.2 阶段 5)
+│       ├── E9_behavior/              # 行为识别 4 + 2 mixed(v0.2 阶段 5)
 │       ├── V1_image_ppt/             # 图为主 PPT vision(合成脱敏)
 │       ├── V2_scan_pdf/              # 扫描 PDF vision 失败降级(stub 形式,实际 PDF 本地保留)
 │       ├── V3_short_video/           # 短视频抽帧 vision
 │       ├── V4_medium_video/          # 中等视频双层抽帧逻辑
+│       ├── V5_embedded_image/        # docx 嵌入图 vision(v0.2 阶段 4)
+│       ├── V6_embedded_table/        # docx 嵌入表 python-docx 抽取(v0.2 阶段 4)
+│       ├── V7_vsdx/                  # vsdx LibreOffice 降级路径(v0.2 阶段 4)
 │       └── README.md                 # fixture 设计原则 + 场景表
 │
 ├── docs/
 │   └── 试用指南.md                   # 装机 / 推荐试用问题 / 边界
 │
-├── prompts/                          # 4 个场景的差异化提示词
-│   ├── 场景1-历史方案查询.md
-│   ├── 场景2-投标章节复用.md
-│   ├── 场景3-技术决策溯源.md
-│   └── 场景4-个人工作记忆.md
+├── prompts/                          # 4 个 PARA scope 差异化提示词(v0.2)
+│   ├── 场景-projects.md
+│   ├── 场景-areas.md
+│   ├── 场景-resources.md
+│   └── 场景-跨corpus盘点.md
 │
 ├── scripts/
 │   ├── ingest.py                     # 入库主流程(G14/G15/G16/G18 分流 + vision pending)
@@ -223,17 +233,41 @@ agentic-kb-lite/
 - **不重组现有文件结构 / 不改文件名**(治理规则 G14 命名规范除外)
 - **不解析 PPT / 视频的非视觉部分**(以 AI 编程助手内置 vision 转写文本入库)
 
+### 5.1 部分格式的处置说明(v0.2 阶段 4)
+
+- **xmind(思维导图)**:不直接支持。请先在 XMind 桌面端**导出为 PNG 或 PDF**,再 ingest 导出文件。导出的 PNG 会走 vision 路径 A(图为主文件)转写,实现内容检索。
+- **shp(GIS 空间数据)**:`.shp/.shx/.dbf/.prj` 等空间数据文件**不在本仓库检索范围**。如果需要"项目用过什么投影 / 字段名"等元数据级检索,请用 GIS 工具(QGIS / ArcGIS)导出 `.prj` 投影信息和 `.dbf` 字段名为 `.txt`,再 ingest。
+- **vsdx(Visio)**:走 LibreOffice headless 转 PDF 后接 binary 路径。**LibreOffice 不可用时永久 stub 标 `failed_no_libreoffice`**(降级,不阻塞)。安装 LibreOffice 后重跑 ingest 自动转换。**v0.2.0 release 时本机未装 LibreOffice,正向路径未实证;v0.2.1 计划回归**。
+- **odf(OpenDocument)**:`.odt/.ods/.odp` 经 markitdown 处理。**v0.2.0 版本下 markitdown 0.1.5 不带 ODF converter,实际走 G15 永久 stub + `odf_status: failed_markitdown_no_odf_converter` 标记**;需正文检索请先用 LibreOffice 转 .docx 后再入库(已有完整 docx G16 路径)。markitdown 后续版本支持 ODF 时自动生效无需改代码。
+
 ## 6. 完整文档导航
 
 | 文档 | 用途 |
 |---|---|
-| [CLAUDE.md](CLAUDE.md) | AI 编程助手运行时契约 — 检索流程 / 同义词 / 引用规范 / 红线;**每次会话必读** |
-| [docs/试用指南.md](docs/试用指南.md) | 装机指南 / 推荐试用问题(7 个,3 类)/ 边界说明 |
-| [scripts/README.md](scripts/README.md) | scripts/ingest.py + scripts/search.py 详细说明(含正则模式 / smoke test) |
-| [tests/查询记录.md](tests/查询记录.md) | 评估证据(E1-E7 + V1-V4)+ 治理记录(R/G/J/F/P/W) |
-| [corpus/.fixtures/README.md](corpus/.fixtures/README.md) | 评估 fixtures 设计原则 + 11 个场景子目录↔场景表 |
+| [CLAUDE.md](CLAUDE.md) | AI 编程助手运行时契约 — 双轴检索(scope × behavior)/ PARA 路由协议 / 引用规范 / 红线;**每次会话必读** |
+| [docs/试用指南.md](docs/试用指南.md) | 装机指南 / 推荐试用问题 / 边界说明 |
+| [docs/v0.1-to-v0.2-migration.md](docs/v0.1-to-v0.2-migration.md) | **v0.1 → v0.2 迁移指南**(v0.2.0 release 起) |
+| [docs/v0.2-plan.md](docs/v0.2-plan.md) | v0.2 升级实施计划(PER 协议;阶段 1-6 全部审定 v1.2) |
+| [scripts/README.md](scripts/README.md) | scripts/ingest.py(scan-only + execute-plan) + search.py + archive_check.py 说明 |
+| [tests/查询记录.md](tests/查询记录.md) | 评估证据(E1-E10 + V1-V7)+ 治理记录(R/G/J/F/P/W) |
+| [tests/v0.2-plan-progress.md](tests/v0.2-plan-progress.md) | v0.2 升级各阶段执行进度 + W 系裁决 |
+| [corpus/.fixtures/README.md](corpus/.fixtures/README.md) | 评估 fixtures 设计原则 + 16 个场景子目录↔场景表 |
 
-## 7. License + 反馈
+## 7. v0.2 升级说明(v0.2.0 release 起)
+
+如你正从 v0.1.0 升级到 v0.2.0,先读 [docs/v0.1-to-v0.2-migration.md](docs/v0.1-to-v0.2-migration.md)。
+
+主要变更:
+
+- **corpus 结构** 扁平 4 目录 → PARA 四层(`01-projects` / `02-areas` / `03-resources` / `04-archives`)
+- **ingest 范式** 规则路由 → AI 语义路由(`scan-only` + `execute-plan` 两步,由 AI 在 agent loop 中读 routing_request.json + 应用 CLAUDE.md §6 PARA 路由协议)
+- **检索体系** 4 素材场景 → scope × behavior 双轴(scope = PARA;behavior = 单点定位 / 盘点 / 决策溯源 / 模糊探索)
+- **新格式支持** docx 嵌入图 + 嵌入表 + vsdx 降级 + odf 降级
+- **frontmatter 注入** ingest 时自动给 .md / .stub.md 注入 4 字段 frontmatter(type / date / project / tags)
+
+**v0.2.0 已知限制**:见 [release notes](https://github.com/Hugin-Z/agentic-kb-lite/releases/tag/v0.2.0)。
+
+## 8. License + 反馈
 
 **LICENSE**: MIT — 详见 [LICENSE](LICENSE)
 

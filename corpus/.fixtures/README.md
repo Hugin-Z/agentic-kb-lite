@@ -63,10 +63,10 @@ rg --json -e "边缘计算" -g "!*.stub.md" corpus/.fixtures/E5_degenerate/
 # === V 系(v0.3 多模态)===
 
 # V1 L1/L2 排除 stub 和 vision(应 0 命中,因正文 .md 不存在)
-rg --json -e "某省" -e "数字化建设" -g "!*.stub.md" -g "!*.vision.md" corpus/.fixtures/V1_image_ppt/
+rg --json -e "分层架构" -e "横向流程" -g "!*.stub.md" -g "!*.vision.md" corpus/.fixtures/V1_image_ppt/
 
 # V1 L2.5(应命中 vision 转写文件)
-rg --json -e "某省" -e "数字化建设" -g "*.vision.md" corpus/.fixtures/V1_image_ppt/
+rg --json -e "分层架构" -e "横向流程" -g "*.vision.md" corpus/.fixtures/V1_image_ppt/
 
 # V2 L1/L2(应 0 命中,扫描 PDF 无正文)
 rg --json -e "农村土地" -e "承包经营权" -g "!*.stub.md" -g "!*.vision.md" corpus/.fixtures/V2_scan_pdf/

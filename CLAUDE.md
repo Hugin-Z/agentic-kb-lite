@@ -7,14 +7,75 @@
 
 ## 1. 本仓库定位
 
-这是一个**轻量个人/部门知识库**,围绕四类典型检索场景:
+这是一个**轻量个人/部门知识库**,v0.2 起采用 **PARA 四层 corpus 组织** + **scope × behavior 双轴检索**:
 
-1. **历史方案查询**(`corpus/01-历史方案/`):写新方案时找历史素材
-2. **投标章节复用**(`corpus/02-投标章节/`):写技术标时找同类章节
-3. **技术决策溯源**(`corpus/03-技术决策/`):跨项目找具体技术决策
-4. **个人工作记忆**(`corpus/04-个人记忆/`):自己写过、讨论过、决定过的事
+### corpus 结构(PARA 四层)
+
+| 一级目录 | 语义 | 典型场景 |
+|---|---|---|
+| `corpus/01-projects/` | 在做的具体项目(有客户、有合同、有 deadline);内部 5 固定子目录(01-方案 / 02-章节 / 03-纪要 / 04-调研 / 05-附图)+ 99-其他兜底 | "上次某客户那个项目怎么做的"、"项目 A 的方案在哪" |
+| `corpus/02-areas/` | 长期维护的责任领域(产品方案库 / 行业解决方案 / 投标章节模板 / 技术方法论);跨项目复用 | "产品方案怎么写架构这章"、"GIS 交付方法论"|
+| `corpus/03-resources/` | 参考资料(国标行标 / 行业研究 / 竞品资料 / 培训与调研);外部权威发布,只参考不维护 | "国标里地块编码字段是什么"、"CIM 国标的最新版" |
+| `corpus/04-archives/` | 已交付且后续不会再用的老项目;**默认不在 P+A+R 全扫 scope**,用户明示"包括归档的"才扩入 | "之前那个老项目"、"已经交付的同类项目" |
+
+### 检索的双轴
+
+- **scope 维度(在哪找)**:由 LLM 在第 5 节按用户问法关键词自动路由到 PARA 一级目录
+- **行为维度(怎么整合)**:由 LLM 在第 2.0 节(步骤 0)按用户问法关键词识别 4 类行为(单点定位 / 盘点 / 决策溯源 / 模糊探索),选对应整合方式
+
+两轴正交,用户不被问任何选择题。
 
 **底层用 ripgrep 做全库扫描,不向量化、不切分、不预处理。**
+
+---
+
+## 2.0 步骤 0:检索行为识别(v0.2 新增)
+
+每次查询的第一件事是识别**检索行为模式**。这决定 LLM 后续步骤怎么整合答案 — 但**不决定**到哪儿找(scope 由第 5 节场景路由决定,行为与 scope 两轴独立)。
+
+### 4 类行为定义
+
+| 行为 | 触发词关键词(优先级从高到低) | 整合方式 |
+|---|---|---|
+| **单点定位** | "那个 / 某 / 上次 / 什么时候 / 谁 / 哪个文件" | 找最精确出处,完整引用 + 行号,单文件即可 |
+| **盘点** | "哪些 / 几个 / 全部 / 列一下 / 都有什么" | 多源遍历,列表化输出 + 计数;跨项目盘点按项目分组 |
+| **决策溯源** | "为什么 / 优劣 / 对比 / 选 X 不选 Y / 怎么决定的" | 多源按时间线 / 角度组织,带对比,引用要齐 |
+| **模糊探索** | 问法宽泛,只有主题词没有指向词 | 给 3-5 个候选文件 + 简短摘要,让用户挑;**不要直接整合答案** |
+
+### 触发词优先级冲突规则
+
+- "为什么" + "某 / 那个 / 上次" → **单点定位**(指向词优先于决策词)
+- "为什么" 单独出现 → 决策溯源
+- "哪些" + "为什么" → **盘点**(盘点词优先于决策词)
+- 无明显主导触发 → **模糊探索**(让用户挑比硬猜安全)
+
+### 行为字段必须写入轮次状态段
+
+第 1 轮状态段必须包含 `检索行为` 与 `行为判定依据` 两个字段(详见第 2 节步骤 2 状态段 schema)。例:
+
+```markdown
+**【轮次状态段 N=1】**
+- 轮次号:1
+- 检索行为:决策溯源
+- 行为判定依据:"为什么"+"选 X 不选 Y" 双触发,无指向词
+- 默认 scope:corpus/01-projects/(第 5 节场景路由)
+- 本轮检索词:[Kingbase, 信创替代, 数据库选型]
+- ...
+```
+
+### 行为稳定性
+
+- 轮 1 写定行为,**后续轮次保持不切换**(行为决定整合方式,中途换会让答案半成品)
+- 如轮 N 跑完发现行为判错(典型:判"单点定位"但命中数远超预期 → 用户实际在做盘点),轮 N+1 状态段第一行明示"**行为校正:单点定位 → 盘点,理由 XXX**",再继续
+
+### 与 scope 路由(第 5 节)的关系
+
+两轴正交:
+
+- 行为(本节)决定"怎么整合答案"
+- scope(第 5 节)决定"扫哪个 PARA 一级目录"
+- 在 Projects 里可以做 4 类行为中任意一种,在 Areas / Resources 里也可以
+- 用户**不被问任何选择题**,两轴都由 LLM 按问法关键词自动识别
 
 ---
 
@@ -24,21 +85,24 @@
 >
 > **状态段时机(决策入参快照,非最终行为记录)**:LLM 在调 ripgrep 之前写完本轮状态段后,**状态段即锁**。工具结果回流后,如果实际决策与状态段所写不同(例:状态段写"继续 ripgrep",但工具结果显示 L1 命中已充分,实际应"进入答案整合"),**新决策放进下一轮状态段的第一行明示**,例如:"实际进入答案整合,上轮状态段为决策入参快照"。**状态段是决策入参的快照,不是最终行为记录;决策修正在下一轮状态段开头明示。**
 >
-> **硬上限**:检索词迭代 ≤ 3 轮;ripgrep 工具调用累计 ≤ 9 次(3 轮 × 3 级)。
+> **硬上限**:检索词迭代 ≤ 3 轮;ripgrep 工具调用累计 ≤ 12 次(3 轮 × 4 级,v0.3 引入 L2.5 后从 9 上调)。
 
-### 步骤 1:解析意图,匹配场景
+### 步骤 1:解析意图,匹配 PARA scope + 4 行为
 
-判断用户问题属于哪个场景(1/2/3/4),载入对应 `prompts/场景N-*.md` 作为本次查询的场景化提示词。
+按第 2.0 节(检索行为识别)+ 第 5 节(场景路由速查)双轴并行识别:
 
-判断不出来时,问用户一次,或者默认按场景 4(个人记忆)处理。
+- **scope 维度**:用户问法关键词路由到 `corpus/01-projects/` / `02-areas/` / `03-resources/` / `04-archives/` 之一,或跨 corpus 盘点
+- **行为维度**:单点定位 / 盘点 / 决策溯源 / 模糊探索 4 选 1
 
-**不主动跨场景检索**——用户问场景 4 的事,不要去 `corpus/01` 找。
+载入对应 `prompts/场景-{projects,areas,resources,跨corpus盘点}.md` 作为本次查询的场景化提示词。
+
+判断不出来时,问用户一次;**不主动跨 scope 检索**(除非用户问法明显跨界,详见第 5 节"跨场景边界")。
 
 ### 步骤 2:第 1 轮检索词生成与状态初始化
 
 **用户问题的措辞和文档措辞经常对不上**。这是轻量方案最大的失败模式。
 
-第 1 轮必须先生成 **3-5 组同义/相关检索词**,覆盖业务术语和技术术语。检索词的起点粒度参考所载入的场景文件的"检索词层级偏好"(场景 1 偏主题词、场景 2 偏章节名、场景 3 偏字段词、场景 4 偏时间+主题词组合)。
+第 1 轮必须先生成 **3-5 组同义/相关检索词**,覆盖业务术语和技术术语。检索词的起点粒度参考所载入的 `prompts/场景-*.md` 的"检索词层级偏好"(projects 偏主题词 + 项目锚;areas 偏章节名 / 方法名;resources 偏标准编号 + 字段词;跨corpus盘点偏技术名 / 行业大类)。
 
 例如:
 
@@ -53,12 +117,17 @@
 ```markdown
 **【轮次状态段 N=1】**
 - 轮次号:1
+- 检索行为:单点定位 | 盘点 | 决策溯源 | 模糊探索      ← v0.2 新增,详见第 2.0 节
+- 行为判定依据:(用户问题中含 XXX 关键词)             ← v0.2 新增
+- 默认 scope:corpus/01-projects/ | 02-areas/ | ...    ← v0.2 新增,详见第 5 节
 - 本轮检索词:[词1, 词2, 词3, ...]
 - 上轮检索词:(本次为第 1 轮)
 - 变化类型判定:(首轮,无判定)
 - 判定依据:(首轮,无判定)
 - 本轮决策:继续 ripgrep
 ```
+
+**v0.2 新增 3 字段**(`检索行为` / `行为判定依据` / `默认 scope`)是 4 类行为 × PARA scope 双轴解耦的落地点。每轮状态段都要带,且**轮 1 写定后续不切换**(行为切换走"轮 N+1 状态段第一行明示行为校正"路径,详见第 2.0 节"行为稳定性")。
 
 ### 步骤 3:本轮检索调用(含四级降级)
 
@@ -82,9 +151,9 @@ v0.6 起 L1 同时扫"文件内容"与"文件名",**两条 rg 串行,工具预�
 参考命令:
 ```bash
 # L1.a 内容扫(沿用 v0.5)
-rg --json -e "关键词1" -e "关键词2" -e "关键词3" -g "!*.stub.md" -g "!*.vision.md" corpus/01-历史方案/
+rg --json -e "关键词1" -e "关键词2" -e "关键词3" -g "!*.stub.md" -g "!*.vision.md" corpus/01-projects/
 # L1.b 文件名扫(v0.6 新增,关键词管道过滤后给 LLM,避免全清单 context 占用)
-rg --files corpus/01-历史方案/ | rg -i "关键词1|关键词2|关键词3"
+rg --files corpus/01-projects/ | rg -i "关键词1|关键词2|关键词3"
 ```
 
 **L2 — 人工正文 .md 拆词模糊**
@@ -93,7 +162,7 @@ rg --files corpus/01-历史方案/ | rg -i "关键词1|关键词2|关键词3"
 
 参考命令:
 ```bash
-rg --json -i -e "告警|阈值|规则" -g "!*.stub.md" -g "!*.vision.md" corpus/01-历史方案/
+rg --json -i -e "告警|阈值|规则" -g "!*.stub.md" -g "!*.vision.md" corpus/01-projects/
 ```
 
 **L2.5(v0.3 新增)— vision 转写文件扫描**
@@ -102,7 +171,7 @@ rg --json -i -e "告警|阈值|规则" -g "!*.stub.md" -g "!*.vision.md" corpus/
 
 参考命令:
 ```bash
-rg --json -e "关键词1" -g "*.vision.md" corpus/01-历史方案/
+rg --json -e "关键词1" -g "*.vision.md" corpus/01-projects/
 ```
 
 **L3 — stub 元数据扫描**
@@ -111,7 +180,7 @@ rg --json -e "关键词1" -g "*.vision.md" corpus/01-历史方案/
 
 参考命令:
 ```bash
-rg --json -e "关键词1" -g "*.stub.md" corpus/01-历史方案/
+rg --json -e "关键词1" -g "*.stub.md" corpus/01-projects/
 ```
 
 L3 全空或全 noise → 进入步骤 6 / 步骤 7,决定是否进入下一轮检索词迭代或承认未找到。
@@ -136,11 +205,11 @@ L3 全空或全 noise → 进入步骤 6 / 步骤 7,决定是否进入下一轮�
 
 例如:
 
-> 该项目使用 Kingbase V8R6 作为信创替代数据库,空间扩展通过 KingbaseGIS 实现 [corpus/03-技术决策/A项目-数据库选型.md:15-22]
+> 该项目使用 Kingbase V8R6 作为信创替代数据库,空间扩展通过 KingbaseGIS 实现 [corpus/01-projects/A项目/01-方案/A项目-数据库选型.md:15-22]
 
-**L2.5 vision 命中**:引用末加 `(vision)` 后缀,如 `[corpus/01-历史方案/某图.pptx.vision.md:23-30 (vision)]`,提醒答案该部分基于 LLM 转写(中等置信度)而非人工正文。
+**L2.5 vision 命中**:引用末加 `(vision)` 后缀,如 `[corpus/01-projects/某图.pptx.vision.md:23-30 (vision)]`,提醒答案该部分基于 LLM 转写(中等置信度)而非人工正文。
 
-**L3 stub 命中**:引用末加 `(stub)` 后缀,如 `[corpus/01-历史方案/某文件.docx.stub.md:5-12 (stub)]`,提醒答案该部分基于元数据而非正文。
+**L3 stub 命中**:引用末加 `(stub)` 后缀,如 `[corpus/01-projects/某文件.docx.stub.md:5-12 (stub)]`,提醒答案该部分基于元数据而非正文。
 
 #### 步骤 5 补充:noise 命中的处理
 
@@ -233,9 +302,15 @@ Claude Code 对话层读取该清单 → 询问用户(支持 `Y` / `N` / 行号�
 | `.png/.jpg/.jpeg/.gif/.bmp/.webp` | Read 工具直接读图像 |
 | `.pdf`(扫描件 G15) | Read 工具支持 PDF;大文件需 `pages` 参数分页(详见 Step 3 实证结果) |
 | `.pptx`(图为主 G18,v0.4+) | **ingest.py 自动 zipfile 解嵌入图**(详见下"v0.4 .pptx 自动解嵌入图")|
+| `.docx`(G16 嵌入图,v0.2 阶段 4) | **ingest.py 自动 zipfile 解嵌入图**(沿用 .pptx 三闸 + zip-slip);**vision 转写注入到原 .md 末尾 `## 嵌入图 vision 转写` 段,不单建 .vision.md**(plan §7.3 假设 6) |
+| `.vsdx`(v0.2 阶段 4) | **LibreOffice headless 转 PDF → 走现有 binary 路径**;LibreOffice 不可用时永久 stub 标 `failed_no_libreoffice`(`scripts/ingest.py` `process_vsdx_to_pdf`) |
 | `.ppt`(老格式) | **不支持直接读** — 用户先手动导出为 PDF / PNG 序列,再走对应路径 |
 
-转写步骤:Claude Read 读图 → 按 .vision.md schema(6 必填字段)输出 → 写入同目录 `<原文件名>.<原扩展名>.vision.md` → 同目录 .stub.md 追加 `vision_done: YYYY-MM-DD`(保持 stub 与 vision 共存)。
+**特例 — .docx 嵌入图 vision 转写位置**(v0.2 阶段 4 新增):
+
+不同于其他图为主文件 vision 转写产物入 `.vision.md`,.docx 嵌入图 vision 转写**直接 inject 到 G16 主 .md 末尾的 `## 嵌入图 vision 转写` 段**。理由:嵌入图是 .docx 正文的组成部分,分开存破坏阅读流。引用规范保持现有 `(vision)` 后缀机制(引用 .docx.md 中 vision 段时末加 `(vision)`)。
+
+转写步骤(其他类型):Claude Read 读图 → 按 .vision.md schema(6 必填字段)输出 → 写入同目录 `<原文件名>.<原扩展名>.vision.md` → 同目录 .stub.md 追加 `vision_done: YYYY-MM-DD`(保持 stub 与 vision 共存)。
 
 **v0.4 .pptx 自动解嵌入图**:`.pptx` 触发 G18 时,`ingest.py` 自动 zipfile 解 `ppt/media/*.png/jpg/jpeg/gif/bmp/webp`(**三闸过滤**:体积 ≥ 30KB + 上限 20 张 + 文件名黑名单 thumbnail/hyperlink + **zip-slip 防御**),解出图临时存放在同目录 `<带前缀 pptx 文件名>.assets/`,Claude 读图完成 vision 转写后该子目录立即删除;**.pptx 不再需要用户手动导出 PDF/PNG**。解图结果通过 stub schema 的 `vision_assets_extraction` / `vision_assets` / `vision_assets_raw_count` 三字段告知 Claude Code 对话层(4 状态:`success` / `filtered_to_zero` / `no_media_in_zip` / `failed`)。
 
@@ -287,8 +362,8 @@ if actual > 上限:
 - 路径用相对路径(相对仓库根),不用绝对路径
 - 行号用 `起-止` 格式,例如 `:15-22`;单行用 `:15`
 - 一个回答可以引用多个出处,不要把多处证据揉成一段不分的引用
-- **L2.5 vision 命中**:引用末加 `(vision)` 后缀(如 `[corpus/01-历史方案/某图.pptx.vision.md:23-30 (vision)]`),提醒来源是 LLM 转写产物(中等置信度,详见独立的"vision 告知规则与禁令"节)
-- **L3 stub 命中**:引用末加 `(stub)` 后缀(如 `[corpus/01-历史方案/某文件.docx.stub.md:5-12 (stub)]`),提醒来源类型
+- **L2.5 vision 命中**:引用末加 `(vision)` 后缀(如 `[corpus/01-projects/某图.pptx.vision.md:23-30 (vision)]`),提醒来源是 LLM 转写产物(中等置信度,详见独立的"vision 告知规则与禁令"节)
+- **L3 stub 命中**:引用末加 `(stub)` 后缀(如 `[corpus/01-projects/某文件.docx.stub.md:5-12 (stub)]`),提醒来源类型
 - 找不到出处的内容**不许写出来**——这是轻量知识库的可信度命门
 - **对外发表前的脱敏责任**:agent loop transcript 中的引用与 stub / vision 元数据可能含本地绝对路径、客户名、与会人姓名等敏感字段。**transcript 直接对外发表(知乎/小红书/技术分享)前,必须由用户人工脱敏源路径字段及其他敏感元数据**;LLM 不主动脱敏(自用语境是 feature,误脱敏会丢失追溯能力)
 
@@ -322,16 +397,34 @@ if actual > 上限:
 
 ---
 
-## 5. 场景路由速查
+## 5. 场景路由速查(v0.2 重写为 PARA 关键词路由)
 
-| 用户问题特征 | 路由到 |
-|------------|--------|
-| "以前 XX 项目怎么做的"、"有没有类似案例"、"看看历史方案" | 场景 1 |
-| "技术标第 X 章"、"应答 XX 评分点"、"这块怎么写" | 场景 2 |
-| "我们用了什么 X"、"为什么选 Y"、"那个项目 Z 怎么实现的" | 场景 3 |
-| "我之前记过"、"上次和 XX 讨论"、"之前那个结论" | 场景 4 |
+LLM 根据用户问题关键词,自动选择默认 **corpus scope**(PARA 一级目录),并载入对应 prompt。这是双轴之一(scope 维度),与第 2.0 节的行为维度**独立**。
 
-边界模糊时,询问用户。
+| 问题关键词特征 | 默认 scope | 对应 prompts |
+|---|---|---|
+| "上次某客户" / "那个项目" / "XX 系统" / 项目名直接出现 | `corpus/01-projects/` | `prompts/场景-projects.md` |
+| "产品方案" / "标准章节" / "方法论" / "handbook" / "投标模板" | `corpus/02-areas/` | `prompts/场景-areas.md` |
+| "国标" / "行标" / "行业研究" / "培训" / "调研报告" / "竞品" | `corpus/03-resources/` | `prompts/场景-resources.md` |
+| "之前那个老项目" / "已经交付的" / "归档的" | `corpus/04-archives/`(**显式打开**,默认不扫) | 复用 `场景-projects.md` |
+| "哪些项目" / "跨项目盘点" / "全部历史" / "都做过哪些" | 全扫 `01-projects/ + 02-areas/ + 03-resources/`(**默认不含 04-archives**) | `prompts/场景-跨corpus盘点.md` |
+
+边界模糊时**询问用户一次**(沿用 v0.1 原则),不要默认猜。
+
+### scope 路由 ≠ 行为识别
+
+- **scope 路由**(本节)决定"扫哪个目录"
+- **行为识别**(第 2.0 节)决定"怎么整合答案"
+- 两者**独立判断**,不互相替代
+
+例:用户问"为什么 XX 项目当时选 Kingbase 不选 PostgreSQL"
+- scope = `corpus/01-projects/`(命中"XX 项目"→ projects 表)
+- 行为 = 决策溯源("为什么 / 选 X 不选 Y" 触发,无指向词)
+- 两轴各自落到轮 1 状态段的对应字段
+
+### 跨场景边界
+
+当用户问题明显跨 scope 时(如"那个项目用了什么国标"),LLM 在 agent loop 内自行扩展(从 projects 检索到引用,再到 resources 找标准原文),**不需要切换 prompts**。每个 prompts 文件末尾的"跨场景边界"段会给出该 scope 的常见跨界路径。
 
 ---
 
@@ -339,7 +432,7 @@ if actual > 上限:
 
 > 本节为 v0.2 引入的新增契约表面,配合 `corpus/.fixtures/` 与 `tests/查询记录.md` 的 E 系 / V 系评估场景使用。v0.3 追加 V 系(vision)评估场景路径。
 
-`tests/查询记录.md` 中 E 系评估场景(E1-E5,agent loop)与 V 系评估场景(V1-V4,vision)的本地回归测试使用 `corpus/.fixtures/<场景目录>/` 作为 ripgrep 路径,**不扫主 corpus**(`corpus/01-历史方案/` 等四个一级目录)。
+`tests/查询记录.md` 中 E 系评估场景(E1-E5,agent loop)与 V 系评估场景(V1-V4,vision)的本地回归测试使用 `corpus/.fixtures/<场景目录>/` 作为 ripgrep 路径,**不扫主 corpus**(`corpus/01-projects/` 等 PARA 四个一级目录)。
 
 评估时 LLM 必须**显式把 ripgrep 路径传 `corpus/.fixtures/<场景目录>/`**,且**按四级 scope 显式排他**(v0.3),例如:
 
@@ -417,9 +510,114 @@ find corpus -type d -name "*.frames" | wc -l
 
 边界:改完直接重跑 ingest 即可生效;**不要为这些常量扩展 CLI 参数或配置文件**(轻量原则)。
 
+### 5.6.3 归档候选扫描(v0.2 新增)
+
+跑 `python scripts/archive_check.py`,输出 `logs/archive_candidates_<date>.txt`,列出 `corpus/01-projects/` 下超过 6 个月无新文件的项目候选。**LLM 不主动 mv**,只展示候选,等用户决定。
+
+调整阈值改 `scripts/archive_check.py` 顶部 `ARCHIVE_THRESHOLD_DAYS` 常量(同 5.6.2 的"轻量原则",不引入 CLI 参数)。
+
 ---
 
-## 6. 检索词生成示例库(持续补充)
+## 6. PARA 路由协议(v0.2 新增)
+
+本节是 ingest 时 AI 路由判断的工作说明书。当用户跑 ingest,你(AI)的工作流如下。
+
+### 6.1 触发条件
+
+用户对你说类似"把 D:/某目录 入库"时,你按本节协议执行:
+
+1. Bash 调 `python scripts/ingest.py scan-only <源目录>`
+2. Read `logs/routing_request.json`
+3. Read `path_map.yaml`(拿 buckets 语义 + hint_subdir_keywords + explicit_mappings)
+4. 按本节 6.2 流程产出路由方案
+5. Write 到 `logs/routing_plan.json`
+6. 展示方案给用户(不强制确认)
+7. Bash 调 `python scripts/ingest.py execute-plan logs/routing_plan.json`
+
+### 6.2 判断流程
+
+#### Step A: 检查 explicit_mappings 优先
+
+对每个源目录/文件,先扫 `path_map.yaml` 的 `explicit_mappings` 字段。匹配到 source 的,直接用对应 target,**跳过后续判断**。
+
+#### Step B: 顶层目录性质判断
+
+若 explicit_mappings 未命中,判断源目录顶层是什么类型:
+
+- **项目目录**:看目录内容,如果包含总体方案 / 架构设计 / 纪要 / 调研等"具体工作单元交付物"迹象 → 整体落到 `01-projects/<原顶层目录名>/`,内部要进一步分流(Step C)
+- **areas 类**:顶层名含"产品" / "方法论" / "投标章节" / "handbook" 关键词 → 整体落到 `02-areas/<合适子目录>/`
+- **resources 类**:顶层名含"标准" / "规范" / "国标" / "行业研究" / "培训" 关键词 → 整体落到 `03-resources/<合适子目录>/`
+- **archives 类**:顶层名含"已交付" / "已归档" / "已完成" → 落到 `04-archives/<原顶层目录名>/`
+- **难判断**:用 Read 抽样看 1-2 个核心文件,基于内容判断,不只看目录名
+
+#### Step C: 项目内部子目录脱钩判断
+
+若 Step B 落到 projects,对项目内的每个子目录做脱钩判断:
+
+判断要点:这个子目录是**项目特有**还是**跨项目可复用**?
+
+- `标准/` `规范/` `国标/` 等 → 跨项目通用资源 → 脱钩到 `03-resources/国标行标/`,**文件名加项目前缀消歧**(如 `<项目名>_<原文件名>`)
+- `行业研究/` `调研报告/` `竞品/` → 脱钩到 `03-resources/` 对应子目录
+- `培训/` `分享/` → 脱钩到 `03-resources/培训与调研/`
+- `纪要/` `调研/` `方案/` → 项目特有,留在项目内,按 Step D 映射到 5 子目录
+- `素材/` `图片/` `截图/` → 留在项目内,落到 `05-附图/`
+- `合同/` `验收/` `招标/` → 项目特有(合同是项目交付一部分),留在项目内 `99-其他/`
+- **模糊的子目录 → 不要硬猜,留在项目内 `99-其他/`**
+
+#### Step D: 单文件级路由(项目内 5 子目录映射)
+
+对每个落到项目内的文件,判断属于哪个子目录:
+
+- 文件名前缀 `方案-` / `设计-` / `架构-` 或文件名含"方案 / 设计 / 架构" → `01-方案/`
+- 文件名前缀 `章节-` → `02-章节/`
+- 文件名前缀 `纪要-` / `会议-` 或父目录是 `纪要/` → `03-纪要/`
+- 文件名前缀 `调研-` / `访谈-` 或父目录是 `调研/` → `04-调研/`
+- 图片扩展名(.png / .jpg / .jpeg / .gif / .bmp / .webp) → `05-附图/`
+- 无前缀但内容明确 → 用 Read 看前 20 行,按内容判断
+- 实在判断不出 → `99-其他/`
+
+### 6.3 输出 schema
+
+写到 `logs/routing_plan.json`。完整 schema 见 `docs/v0.2-plan.md` §5.3 步骤 2.3。
+
+每条 `items[i]` 必须包含:
+
+| 字段 | 含义 |
+|---|---|
+| `src_abs` | 源文件绝对路径(从 routing_request.json 复制) |
+| `target_bucket` | 一级目录:`01-projects` / `02-areas` / `03-resources` / `04-archives` |
+| `target_project` | 仅当 bucket=01-projects 时有值,通常 = 顶层目录名 |
+| `target_subdir` | bucket=01-projects 时是 5 子目录之一;否则是 areas/resources 的二级子目录 |
+| `target_filename` | 目标文件名(脱钩到 resources 时**必须**加项目前缀消歧) |
+| `frontmatter` | 注入到 .md 的 dict:`type / date / project / tags` |
+| `ai_reason` | 路由判断理由(1-2 句话,供用户快速审) |
+
+`frontmatter.project` 在 resources / areas 落地时**应为 null**(跨项目可复用,不绑定单项目)。
+
+`frontmatter.date` 推断顺序:文件名形如 `YYYY-MM-DD` → 文件名日期;否则取源文件 mtime 的日期部分。
+
+### 6.4 约束
+
+- **不要主动改源目录命名** —— 路由完全基于读取
+- **不要把可能是 resources 的内容(标准 / 国标)留在项目内** —— 跨项目可复用资源必须脱钩
+- **不要把项目特有内容(纪要 / 调研)脱钩到 areas** —— 这些内容跟项目绑定
+- **难判断的优先 `99-其他/`**,不要瞎归到 areas / resources —— 宁可保守归类
+- **整个子目录决定前,Read 抽样看 1-2 个核心文件**,基于内容判断,不只看文件名
+- **重名文件冲突时自动加项目前缀消歧**,不要覆盖原文件
+- **archives_hint 关键词命中时倾向归到 archives**,但用 mtime 二次确认
+
+### 6.5 用户介入点
+
+`routing_plan.json` 产出后,展示给用户。用户可能:
+
+- 没异议 → 直接跑 `execute-plan`
+- 有异议 → 用户告诉你哪条不对,你修订 plan 后再展示
+
+不需要每次都让用户敲 y 确认 —— 展示即可,用户沉默视为认可。
+
+---
+
+## 7. 检索词生成示例库(持续补充)
 
 ### 通用业务术语
 
@@ -451,9 +649,25 @@ find corpus -type d -name "*.frames" | wc -l
 
 ---
 
-## 7. 本文件版本管理
+## 8. 本文件版本管理
+
+> CLAUDE.md 内部版本号与项目 release tag 两套并行 — 本节追踪契约文档本身的演进。项目 release tag 在 `docs/v0.2-plan.md` §12 与 git tags。
 
 - v0.1:初始版
+- **v0.7(本版,对应项目 release v0.2.0)**:PARA 四层 corpus + scope × behavior 双轴检索 + AI 语义路由 ingest + 嵌入媒体格式扩展
+  - 第 1 节本仓库定位重写:从 v0.1 四类场景表 → PARA 四层 corpus 表 + 双轴检索说明
+  - 新增 **第 2.0 节"步骤 0:检索行为识别"**:4 类行为定义(单点定位 / 盘点 / 决策溯源 / 模糊探索)+ 触发词优先级冲突规则 + 行为稳定性
+  - 第 2 节状态段 schema 加 v0.2 新增 3 字段(`检索行为` / `行为判定依据` / `默认 scope`);硬上限补正"≤ 12 次(3 × 4 级)"(对齐其他位置)
+  - 第 2.5.2 路径 A 表新增 `.docx 嵌入图`(v0.2 阶段 4)+ `.vsdx`(LibreOffice headless)两行 + ".docx 嵌入图 vision 转写位置"特例段
+  - 第 5 节场景路由速查重写为 **PARA 关键词路由**(projects / areas / resources / archives / 跨corpus 盘点 5 行表)+ scope 路由 ≠ 行为识别说明 + 跨场景边界段
+  - 新增 **第 5.6.3 子段"归档候选扫描"**(`scripts/archive_check.py` + `ARCHIVE_THRESHOLD_DAYS`)
+  - 新增 **第 6 节"PARA 路由协议"**(98 行):6.1 触发条件 / 6.2 Step A-D 判断流程 / 6.3 输出 schema(routing_plan.json 7 字段 + frontmatter 4 字段)/ 6.4 约束 8 条 / 6.5 用户介入点
+  - 原 v0.6 第 6 / 7 节顺延为 7 / 8(检索词生成示例库 / 本文件版本管理)
+  - prompts/ v0.1 4 个 → v0.2 4 个完全替换(场景-projects / areas / resources / 跨corpus盘点,每个 6 段固定结构);v0.1 备份在 `tests/v0.1-prompts-archive/`
+  - scripts/search.py SCENE_MAP → BUCKET_MAP / `--scene` → `--scope` / 新增 `--project` 参数;scripts/ingest.py 拆 `scan-only` + `execute-plan` 两个子命令(AI 语义路由)+ 新增 `extract_docx_assets` / `extract_docx_tables` / `process_vsdx_to_pdf` 3 个 helper + odf 异常降级
+  - tests/查询记录.md 追加 E8 / E9 / E10 + W-W1 E2/E4 抽样 + V5 / V6 / V7 共 7 个新评估场景
+  - 顺手修(v0.7 顺手):第 2 节硬上限 9→12(v0.3 prelude 同步漏修)+ search.py SCENE_MAP 失效(阶段 1 隐式遗漏)
+  - **不在 v0.7 范围**(留 release notes / v0.2.1 / v0.3):vsdx LibreOffice 可用正向路径未实证(本机未装)/ ODF markitdown 0.1.5 不支持走 stub 降级 / 行为识别 3+ 触发词混合 case 靠 LLM 推断
 - v0.2:引入 agent loop 多轮检索 + 跨工具三级降级(P0)
   - 第 2 节工作流从"单次流水线"改为"有状态多轮 agent loop";状态段时机为"决策入参快照,非最终行为记录"
   - 步骤 2 改名"第 1 轮检索词生成与状态初始化",新增轮次状态段固定 schema

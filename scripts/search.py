@@ -1,8 +1,17 @@
 """search.py - knowledge-base ripgrep 包装器(≤200 行)
-对应 CLAUDE.md 第 2 节工作流步骤 3-4(ripgrep + 上下文)。LLM(Claude Code 会话)做步骤 1-2-5-6。
-用法: python scripts/search.py --scene 01|02|03|04|all --terms "词1,词2,词3" [--context 20] [--max-files 8] [--no-stub] [--regex]
-默认走 --fixed-strings 字面匹配(项目名带括号 / 版本号带星号 / 缩写带方括号 等不会误触发正则);需要正则用 --regex。
-rg 路径解析:Windows 平台优先使用仓库内 tools/rg.exe(bundled,固定版本可复现);非 Windows 平台或 bundled 不存在时,fallback 到系统 PATH 的 rg。
+对应 CLAUDE.md 第 2 节工作流步骤 3-4(ripgrep + 上下文)。LLM(Claude Code 会话)做步骤 0-1-2-5-6。
+用法(v0.2 PARA 重构):
+  python scripts/search.py --terms "词1,词2,词3" [--scope projects|areas|resources|archives|all]
+                          [--project <项目名>] [--context 20] [--max-files 8] [--no-stub] [--regex]
+
+scope 语义(v0.2):
+  - projects(默认)/ areas / resources:对应 corpus/01-projects / 02-areas / 03-resources
+  - archives:对应 corpus/04-archives(用户显式打开才扫,默认不在 all 内)
+  - all:全扫 P+A+R(默认不含 archives,匹配 CLAUDE.md 5 节"跨corpus盘点"语义)
+
+--project <名> 限定到 corpus/01-projects/<名>/(精度提升,scope 自动隐含 projects)。
+默认走 --fixed-strings 字面匹配;需正则用 --regex。
+rg 路径解析:Windows 优先 tools/rg.exe(bundled);其他平台或 bundled 不存在时 fallback 系统 PATH。
 """
 import argparse, json, platform, shutil, subprocess, sys
 from pathlib import Path
@@ -10,7 +19,15 @@ from pathlib import Path
 sys.stdout.reconfigure(encoding="utf-8")
 sys.stderr.reconfigure(encoding="utf-8")
 
-SCENE_MAP = {"01": "01-历史方案", "02": "02-投标章节", "03": "03-技术决策", "04": "04-个人记忆"}
+# v0.2 PARA 重构:SCENE_MAP v0.1 → BUCKET_MAP v0.2
+BUCKET_MAP = {
+    "projects": "01-projects",
+    "areas": "02-areas",
+    "resources": "03-resources",
+    "archives": "04-archives",
+}
+# all 默认不含 archives(沿 CLAUDE.md 5 节"跨corpus盘点"约定)
+ALL_BUCKETS = ["projects", "areas", "resources"]
 CORPUS = Path(__file__).resolve().parent.parent / "corpus"
 REPO = CORPUS.parent
 
@@ -48,8 +65,12 @@ def resolve_rg_path():
 
 
 def parse_args():
-    p = argparse.ArgumentParser(description="knowledge-base search")
-    p.add_argument("--scene", default="all", help="01/02/03/04/all")
+    p = argparse.ArgumentParser(description="knowledge-base search (v0.2 PARA)")
+    p.add_argument("--scope", default="projects",
+                   help="PARA scope: projects(默认) / areas / resources / archives / all"
+                        "(all=P+A+R,不含 archives;archives 需显式指定)")
+    p.add_argument("--project", type=str, default=None,
+                   help="限定到某个项目(corpus/01-projects/<名>/),scope 自动隐含 projects")
     p.add_argument("--terms", required=True, help="逗号分隔检索词列表")
     p.add_argument("--context", type=int, default=20)
     p.add_argument("--max-files", type=int, default=8)
@@ -59,13 +80,26 @@ def parse_args():
     return p.parse_args()
 
 
-def resolve_dirs(scene):
-    if scene == "all":
-        return [CORPUS / SCENE_MAP[k] for k in sorted(SCENE_MAP)]
-    if scene not in SCENE_MAP:
-        sys.stderr.write(f"ERROR: 未知场景 {scene} (须 01/02/03/04/all)\n")
+def resolve_dirs(scope, project=None):
+    """v0.2 PARA scope 解析。--project 优先级最高,scope 自动隐含 projects。"""
+    if project is not None:
+        proj_dir = CORPUS / BUCKET_MAP["projects"] / project
+        if not proj_dir.is_dir():
+            sys.stderr.write(f"ERROR: 项目 '{project}' 不存在于 corpus/01-projects/\n")
+            sys.stderr.write(f"  可用项目:\n")
+            projects_root = CORPUS / BUCKET_MAP["projects"]
+            if projects_root.is_dir():
+                for p in sorted(projects_root.iterdir()):
+                    if p.is_dir():
+                        sys.stderr.write(f"    - {p.name}\n")
+            sys.exit(1)
+        return [proj_dir]
+    if scope == "all":
+        return [CORPUS / BUCKET_MAP[k] for k in ALL_BUCKETS]
+    if scope not in BUCKET_MAP:
+        sys.stderr.write(f"ERROR: 未知 scope '{scope}' (须 projects/areas/resources/archives/all)\n")
         sys.exit(2)
-    return [CORPUS / SCENE_MAP[scene]]
+    return [CORPUS / BUCKET_MAP[scope]]
 
 
 def check_rg_proc(proc, terms, args):
@@ -204,7 +238,7 @@ def main():
         sys.stderr.write("ERROR: --terms 为空\n")
         sys.exit(2)
     rg, rg_source = resolve_rg_path()
-    dirs = resolve_dirs(args.scene)
+    dirs = resolve_dirs(args.scope, args.project)
     for d in dirs:
         if not d.is_dir():
             sys.stderr.write(f"ERROR: corpus 子目录不存在 {d}\n")
@@ -225,10 +259,15 @@ def main():
     if len(stubs) > args.max_files:
         stubs = {k: stubs[k] for k in list(stubs)[:args.max_files]}
         stub_trim = True
-    label = SCENE_MAP[args.scene] if args.scene != "all" else "全部 4 个场景"
+    if args.project:
+        label = f"项目 '{args.project}'"
+    elif args.scope == "all":
+        label = "全扫 P+A+R(不含 archives)"
+    else:
+        label = f"{args.scope} ({BUCKET_MAP[args.scope]})"
     total = len(texts) + len(stubs)
     print("# 检索结果\n")
-    print(f"- **场景**: {args.scene} ({label})")
+    print(f"- **scope**: {label}")
     print(f"- **检索词**: {' | '.join(terms)}  (匹配模式: {'regex' if args.regex else 'fixed-strings'})")
     print(f"- **rg 路径**: {rg}  (来源: {rg_source})")
     print(f"- **命中文件**: {total} (正文 {len(texts)} + stub {len(stubs)})\n")

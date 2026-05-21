@@ -1,6 +1,15 @@
 # scripts/
 
-> 本目录是检索 pipeline 的代码区,严格控量。
+> 本目录是检索 + ingest pipeline 的代码区,严格控量。
+
+> **v0.2 起 CLI 大变**:本文档下方多处描述基于 v0.1(`ingest.py <path>` 单命令 + `path_mappings` 规则匹配 + `search.py --scene`)。v0.2 范式切换:
+>
+> - **ingest** 拆 `python ingest.py scan-only <src>` + `execute-plan <plan>` 两步,AI 在对话层产 routing_plan.json(详见 [CLAUDE.md §6 PARA 路由协议](../CLAUDE.md#6-para-路由协议))
+> - **path_map.yaml** 退化为 `buckets` 语义 + `hint_subdir_keywords` + `explicit_mappings` 兜底,**`path_mappings` / `prefix_rules` 字段在 v0.2 已废弃**
+> - **search.py** `--scene 01/02/03/04` → `--scope projects/areas/resources/archives/all` + 新增 `--project <名>`
+> - **新增 `archive_check.py`** 归档候选扫描
+>
+> 下方旧文档保留作历史参考,完整 v0.2 行为以 [CLAUDE.md](../CLAUDE.md) 为准。**v0.2.1 计划重写本 README**。
 
 **架构边界**:`search.py` 是 ripgrep 的低层包装器(单次扫描 / 文件 scope 过滤 / 正则模式开关),**不实现 agent loop**。完整 agent loop(4 级降级 / 文件名扫描 / 轮间迭代 / 状态段判定 / 实质变化判定)由 AI 编程助手(Claude Code / Codex 等)按 [CLAUDE.md](../CLAUDE.md) 契约在对话层执行,每轮调用 `search.py` 做一次 ripgrep。`search.py` 本身无"轮次"概念。
 

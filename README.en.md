@@ -100,14 +100,17 @@ python3 -m venv .venv
 ./setup_system_tools.sh      # detect rg / ffmpeg / poppler (optional)
 ```
 
-### 3.3 Configure path_map.yaml (1–2 sources)
+### 3.3 Configure path_map.yaml (v0.2+ AI semantic routing)
 
-Edit `path_map.yaml` at the repo root, uncomment a placeholder, point it at your local materials directory:
+Starting in v0.2, **path_map.yaml degrades to semantic descriptions + hints + explicit_mappings overrides**; the AI decides target placement during ingest by reading [CLAUDE.md §6 "PARA routing protocol"](CLAUDE.md) (`01-projects/` / `02-areas/` / `03-resources/` / `04-archives/`). **Usually you don't need to edit path_map.yaml** — the AI knows that a "standards/" subdir should detach to resources/national-standards, that "minutes/" should stay inside the project as 03-纪要.
+
+Only add a user-preference override to `explicit_mappings` if the AI's judgment isn't ideal:
 
 ```yaml
-path_mappings:
-  - source: "D:/my-project-materials"      # absolute path on your machine
-    target: "01-历史方案/some-project"      # where it lands inside corpus/
+explicit_mappings:
+  - source: "D:/contract-package/"
+    target: "02-areas/合同档案/"
+    reason: "Directory mentions a project name but content is contracts; areas fits better"
 ```
 
 ### 3.4 Run it with the AI coding assistant
@@ -137,12 +140,14 @@ Scanning D:/my-project-materials → 42 files matched
 Proceed with actual ingest? (y/n)
 
 [Query: How did I design the architecture for a previous project?]
-[Round 1] Retrieval terms: ["system architecture", "project proposal", "technical architecture"]
-[L1] rg hits corpus/01-历史方案/some-project-2025/proposal-XX.md (line 15-42)
-[L2] filename scan hits corpus/01-历史方案/2024Q3-base-architecture.md
+[Round 1 state segment]
+  Retrieval behavior: fuzzy exploration (theme word only, no indicator)
+  Default scope: corpus/01-projects/ (matched "project")
+[L1] rg hits corpus/01-projects/some-project-2025/01-方案/master-plan.md (line 15-42)
+[L2] filename scan hits corpus/01-projects/customer-A-2024Q3/01-方案/base-architecture.md
 [Synthesis] Based on 2 body-text evidence pieces:
-- Project A used X architecture, with core being ... (see corpus/01-历史方案/...:15-42)
-- Project B used Y pattern, because ... (see corpus/01-历史方案/2024Q3-...)
+- Project A used X architecture, with core being ... (see corpus/01-projects/some-project-2025/...:15-42)
+- Project B used Y pattern, because ... (see corpus/01-projects/customer-A-2024Q3/...)
 
 Tool calls: 2 / 12 budget.
 ````
@@ -176,11 +181,11 @@ agentic-kb-lite/
 ├── requirements.txt                  # Python deps
 ├── .gitignore                        # covers logs/ / .assets/ / .frames/ / private tests/
 │
-├── corpus/                           # materials main tree
-│   ├── 01-历史方案/                  # project proposals / prototypes / tech docs
-│   ├── 02-投标章节/                  # bid technical sections / tender docs
-│   ├── 03-技术决策/                  # ADRs / selection comparisons
-│   ├── 04-个人记忆/                  # notes / meeting minutes / research
+├── corpus/                           # materials main tree (PARA 4-layer since v0.2)
+│   ├── 01-projects/                  # active projects; 5 fixed subdirs (01-方案/02-章节/03-纪要/04-调研/05-附图) + 99-其他
+│   ├── 02-areas/                     # long-maintained domains (product solutions / industry solutions / bid section templates / methodologies)
+│   ├── 03-resources/                 # reference materials (national standards / industry research / competitor materials / training)
+│   ├── 04-archives/                  # delivered & inactive projects (not in default P+A+R scope)
 │   └── .fixtures/                    # reproducible evaluation fixtures (tracked)
 │       ├── E1_simple/                # agent loop simple single-round
 │       ├── E2_expand/                # 0-hit expand
@@ -189,20 +194,25 @@ agentic-kb-lite/
 │       ├── E5_degenerate/            # invalid iteration → degenerate
 │       ├── E6_filename_only/         # filename-only hit (v0.6)
 │       ├── E7_filename_misleading/   # filename misleading (v0.6)
+│       ├── E8_scope_routing/         # scope routing (v0.2 stage 5)
+│       ├── E9_behavior/              # behavior detection 4 + 2 mixed (v0.2 stage 5)
 │       ├── V1_image_ppt/             # image-heavy PPT vision (anonymized synthetic)
 │       ├── V2_scan_pdf/              # scanned PDF vision-failure fallback (stub form)
 │       ├── V3_short_video/           # short-video frame extraction + vision
 │       ├── V4_medium_video/          # medium video two-layer extraction logic
+│       ├── V5_embedded_image/        # docx embedded-image vision (v0.2 stage 4)
+│       ├── V6_embedded_table/        # docx embedded-table python-docx extraction (v0.2 stage 4)
+│       ├── V7_vsdx/                  # vsdx LibreOffice fallback path (v0.2 stage 4)
 │       └── README.md                 # fixture design principles + scenario table
 │
 ├── docs/
 │   └── 试用指南.md                   # install guide / recommended trial queries / boundaries
 │
-├── prompts/                          # 4 scenario-specific prompts
-│   ├── 场景1-历史方案查询.md         # scenario 1: historical-proposal lookup
-│   ├── 场景2-投标章节复用.md         # scenario 2: bid-section reuse
-│   ├── 场景3-技术决策溯源.md         # scenario 3: tech-decision tracing
-│   └── 场景4-个人工作记忆.md         # scenario 4: personal work memory
+├── prompts/                          # 4 PARA-scope-specific prompts (v0.2)
+│   ├── 场景-projects.md              # scope = corpus/01-projects/
+│   ├── 场景-areas.md                 # scope = corpus/02-areas/
+│   ├── 场景-resources.md             # scope = corpus/03-resources/
+│   └── 场景-跨corpus盘点.md           # cross-corpus inventory (P+A+R)
 │
 ├── scripts/
 │   ├── ingest.py                     # ingest pipeline (G14/G15/G16/G18 routing + vision_pending)
@@ -226,17 +236,41 @@ agentic-kb-lite/
 - **No restructuring of existing files / no renaming** (except governance rule G14 prefixes)
 - **No parsing of PPT / video non-visual parts** (entered as AI-coding-assistant vision-transcribed text)
 
+### 5.1 Format-specific handling (v0.2 stage 4)
+
+- **xmind (mind maps)**: not supported directly. Export to PNG or PDF first from the XMind desktop app, then ingest the exported file. Exported PNG goes through vision path A (image-heavy file) transcription.
+- **shp (GIS spatial data)**: `.shp/.shx/.dbf/.prj` are **out of retrieval scope**. For metadata-level queries (which projection / field names), use a GIS tool (QGIS / ArcGIS) to export `.prj` and `.dbf` field names to `.txt`, then ingest.
+- **vsdx (Visio)**: goes through LibreOffice headless → PDF → binary path. **When LibreOffice is unavailable, falls back to a permanent stub with `failed_no_libreoffice`** (degraded, non-blocking). Re-run ingest after installing LibreOffice. **In v0.2.0 release the host does not have LibreOffice; the positive path is not empirically validated; v0.2.1 will revisit.**
+- **odf (OpenDocument)**: `.odt/.ods/.odp` are processed by markitdown. **In v0.2.0, markitdown 0.1.5 does not ship an ODF converter, so files fall back to G15 permanent stub with `odf_status: failed_markitdown_no_odf_converter`**; for body-text retrieval, convert to .docx via LibreOffice first, then ingest (the docx G16 path is fully supported). Once markitdown adds ODF support, this works automatically without code changes.
+
 ## 6. Full documentation
 
 | Document | Purpose |
 |---|---|
-| [CLAUDE.md](CLAUDE.md) | AI coding assistant runtime contract — retrieval flow / synonyms / citation / red lines; **mandatory pre-read** per session |
-| [docs/试用指南.md](docs/试用指南.md) | Install guide / 7 recommended trial queries (3 categories) / boundaries |
-| [scripts/README.md](scripts/README.md) | `scripts/ingest.py` + `scripts/search.py` deep details (regex mode / smoke test) |
-| [tests/查询记录.md](tests/查询记录.md) | Evaluation evidence (E1–E7 + V1–V4) + governance records (R/G/J/F/P/W) |
-| [corpus/.fixtures/README.md](corpus/.fixtures/README.md) | Fixture design principles + 11 scenario subdirs ↔ scenario mapping |
+| [CLAUDE.md](CLAUDE.md) | AI coding assistant runtime contract — dual-axis retrieval (scope × behavior) / PARA routing protocol / citation / red lines; **mandatory pre-read** per session |
+| [docs/试用指南.md](docs/试用指南.md) | Install guide / recommended trial queries / boundaries |
+| [docs/v0.1-to-v0.2-migration.md](docs/v0.1-to-v0.2-migration.md) | **v0.1 → v0.2 Migration Guide** (since v0.2.0 release) |
+| [docs/v0.2-plan.md](docs/v0.2-plan.md) | v0.2 upgrade implementation plan (PER protocol; stages 1–6 all sealed at v1.2) |
+| [scripts/README.md](scripts/README.md) | `scripts/ingest.py` (`scan-only` + `execute-plan`) + `search.py` + `archive_check.py` |
+| [tests/查询记录.md](tests/查询记录.md) | Evaluation evidence (E1–E10 + V1–V7) + governance records (R/G/J/F/P/W) |
+| [tests/v0.2-plan-progress.md](tests/v0.2-plan-progress.md) | v0.2 upgrade stage-by-stage execution progress + W-system adjudications |
+| [corpus/.fixtures/README.md](corpus/.fixtures/README.md) | Fixture design principles + 16 scenario subdirs ↔ scenario mapping |
 
-## 7. License + feedback
+## 7. v0.2 upgrade notes (since v0.2.0)
+
+If you're upgrading from v0.1.0 to v0.2.0, read [docs/v0.1-to-v0.2-migration.md](docs/v0.1-to-v0.2-migration.md) first.
+
+Key changes:
+
+- **corpus layout**: flat 4 dirs → PARA 4-layer (`01-projects` / `02-areas` / `03-resources` / `04-archives`)
+- **ingest paradigm**: rule routing → AI semantic routing (`scan-only` + `execute-plan`; the AI reads routing_request.json and applies CLAUDE.md §6 in the agent loop)
+- **retrieval**: 4 material scenarios → scope × behavior dual axes (scope = PARA; behavior = single-point / inventory / decision tracing / fuzzy exploration)
+- **new format support**: docx embedded images + embedded tables + vsdx fallback + odf fallback
+- **frontmatter injection**: ingest auto-injects a 4-field frontmatter (type / date / project / tags) into .md / .stub.md
+
+**v0.2.0 known limitations**: see [release notes](https://github.com/Hugin-Z/agentic-kb-lite/releases/tag/v0.2.0).
+
+## 8. License + feedback
 
 **LICENSE**: MIT — see [LICENSE](LICENSE)
 
