@@ -106,10 +106,10 @@ Write-Host ""
 
 # ---------- [5/6] 验证 ----------
 Write-Host "[5/6] 验证安装(跑 search.py 烟测查询)..."
-& .venv\Scripts\python.exe scripts\search.py --scene all --terms "__install_smoke_test_zzzz__" | Out-Null
+& .venv\Scripts\python.exe scripts\search.py --scope all --terms "__install_smoke_test_zzzz__" | Out-Null
 if ($LASTEXITCODE -ne 0) {
     Write-Host "  [FAIL] 验证步骤异常(search.py 烟测失败)" -ForegroundColor Red
-    Write-Host "    安装可能不完整。手动跑一次看错误:.venv\Scripts\python.exe scripts\search.py --scene all --terms test"
+    Write-Host "    安装可能不完整。手动跑一次看错误:.venv\Scripts\python.exe scripts\search.py --scope all --terms test"
     Write-Host "    仍解决不了请联系维护者。"
     exit 1
 }
