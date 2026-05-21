@@ -532,7 +532,23 @@ ALLOWED_BUCKETS = {"01-projects", "02-areas", "03-resources", "04-archives"}
 # target_subdir 在 v0.2.1 表面"可空",但 _build_target_dir 当 01-projects 时强制访问 item["target_subdir"]
 # 会 KeyError 崩溃 → 收紧为必填;非 projects 类(02-areas/03-resources/04-archives)若缺 subdir
 # 会落到 bucket 根目录,语义模糊,同样要求必填
-REQUIRED_FIELDS = {"src_abs", "target_bucket", "target_subdir", "target_filename"}
+#
+# v0.2.2 Codex-4th 收口:扩到 6 字段,与 README/README.en/CLAUDE.md §6.3 + process_file_with_explicit_target
+# docstring(line ~621)声明的"6 字段必填"完全对齐。frontmatter / ai_reason 缺任一字段都拒。
+# 语义说明:
+#   - 校验只看"key 是否存在",不强制非 null:frontmatter=null 或 frontmatter={} 都通过(下游
+#     `item.get("frontmatter") or {}` 把 null 视同 {});ai_reason=null 也通过(AI 推理字符串
+#     可空,实际由 AI 写入空字符串或描述)
+#   - 这跟 target_project=null 在非 projects bucket 合法的设计一致(null = "明示无值",不是
+#     "字段未提供")
+REQUIRED_FIELDS = {
+    "src_abs",
+    "target_bucket",
+    "target_subdir",
+    "target_filename",
+    "frontmatter",
+    "ai_reason",
+}
 
 
 def _validate_plan_item_paths(item: dict) -> None:
