@@ -525,14 +525,31 @@ def is_temp_or_hidden(name, src_path=None):
 # 包含 ".."、绝对路径前缀、路径分隔符等危险字段;统一在拼路径前拒绝
 ALLOWED_BUCKETS = {"01-projects", "02-areas", "03-resources", "04-archives"}
 
+# v0.2.2 C-1:plan item schema 必填字段(任一缺失 → ERROR_INVALID_PLAN_ITEM,不中断其他 items)
+# target_subdir 在 v0.2.1 表面"可空",但 _build_target_dir 当 01-projects 时强制访问 item["target_subdir"]
+# 会 KeyError 崩溃 → 收紧为必填;非 projects 类(02-areas/03-resources/04-archives)若缺 subdir
+# 会落到 bucket 根目录,语义模糊,同样要求必填
+REQUIRED_FIELDS = {"src_abs", "target_bucket", "target_subdir", "target_filename"}
+
 
 def _validate_plan_item_paths(item: dict) -> None:
-    """v0.2.1 P0-2:对 plan item 的 bucket / project / subdir / filename 做路径边界校验。
+    """v0.2.1 P0-2 / v0.2.2 C-1:对 plan item 做 schema + 路径边界双重校验。
     失败抛 ValueError(message 含字段名 + 触发原因);execute_plan 调用方 catch 后转 ERROR_INVALID_PLAN_ITEM。"""
+
+    # v0.2.2 C-1:schema 校验(必填字段 + 01-projects 时 target_project 必填)
+    missing = REQUIRED_FIELDS - set(item.keys())
+    if missing:
+        raise ValueError(f"plan item 缺必填字段 {sorted(missing)}, src_abs={item.get('src_abs')}")
 
     bucket = item.get("target_bucket")
     if bucket not in ALLOWED_BUCKETS:
         raise ValueError(f"target_bucket 不在白名单 {sorted(ALLOWED_BUCKETS)}: {bucket!r}")
+
+    # v0.2.2 C-1:01-projects bucket 必须有 target_project(_build_target_dir 强制访问)
+    if bucket == "01-projects" and not item.get("target_project"):
+        raise ValueError(
+            f"01-projects bucket requires target_project, src_abs={item.get('src_abs')}"
+        )
 
     def _check_path_component(field_name: str, value: str | None, allow_subpath: bool = False) -> None:
         if value is None or value == "":
@@ -937,21 +954,15 @@ def execute_plan(plan_file: Path, dry_run: bool = False) -> dict:
     if not plan_file.is_file():
         sys.stderr.write(f"ERROR: plan 文件不存在 {plan_file}\n")
         sys.exit(2)
-    plan = json.loads(plan_file.read_text(encoding="utf-8"))
+    # v0.2.2 C-2:utf-8-sig 兼容 BOM(PowerShell Out-File 默认带 BOM)+ 普通 UTF-8;无副作用
+    plan = json.loads(plan_file.read_text(encoding="utf-8-sig"))
     items = plan.get("items", [])
     if not items:
         sys.stderr.write(f"ERROR: plan 中没有 items\n")
         sys.exit(2)
 
-    required = {"src_abs", "target_bucket", "target_filename"}
-    for i, it in enumerate(items):
-        missing = required - set(it.keys())
-        if missing:
-            sys.stderr.write(f"ERROR: items[{i}] 缺字段 {missing}\n")
-            sys.exit(2)
-        if it["target_bucket"] == "01-projects" and not it.get("target_project"):
-            sys.stderr.write(f"ERROR: items[{i}] bucket=01-projects 但缺 target_project\n")
-            sys.exit(2)
+    # v0.2.2 C-1:schema 校验下沉到 _validate_plan_item_paths(per-item,失败转 ERROR_INVALID_PLAN_ITEM,
+    # 不再 sys.exit;单 item bad 不阻塞其他 items 处理)
 
     md_engine_holder = [None]
     log_records = load_ingest_log()
