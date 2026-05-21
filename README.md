@@ -310,6 +310,14 @@ agentic-kb-lite/
 - **vsdx(Visio)**:走 LibreOffice headless 转 PDF 后接 binary 路径。**LibreOffice 不可用时永久 stub 标 `failed_no_libreoffice`**(降级,不阻塞)。安装 LibreOffice 后重跑 ingest 自动转换。**v0.2.0 release 时本机未装 LibreOffice,正向路径未实证;v0.2.1 计划回归**。
 - **odf(OpenDocument)**:`.odt/.ods/.odp` 经 markitdown 处理。**v0.2.0 版本下 markitdown 0.1.5 不带 ODF converter,实际走 G15 永久 stub + `odf_status: failed_markitdown_no_odf_converter` 标记**;需正文检索请先用 LibreOffice 转 .docx 后再入库(已有完整 docx G16 路径)。markitdown 后续版本支持 ODF 时自动生效无需改代码。
 
+### 3.6 验证安装(v0.2.1 新增)
+
+```bash
+python scripts/smoke_test.py
+```
+
+4 个 assert(install 调用参数 / scan-only / 路径边界拒绝 malformed / 关键依赖 import),~3 秒跑完。任一失败说明环境有缺。**完整自动化测试见 [scripts/smoke_test.py](scripts/smoke_test.py)**。
+
 ## 6. 完整文档导航
 
 | 文档 | 用途 |
