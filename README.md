@@ -179,7 +179,7 @@ AI 跑完 `scan-only` 后产出的 `routing_plan.json` 长这样(5 items 简化�
 }
 ```
 
-**说明**:每个 item 的 `src_abs` / `target_bucket` / `target_filename` 必填(P0-2 路径边界校验);`target_project` 仅 01-projects 必填;`frontmatter.project` 在非 projects 类落地时应为 null。schema 完整字段见 [CLAUDE.md §6.3](CLAUDE.md) + [docs/v0.2-plan.md §5.3 步骤 2.3](docs/v0.2-plan.md)。
+**说明**:每个 item 的 `src_abs` / `target_bucket` / `target_subdir` / `target_filename` / `frontmatter` / `ai_reason` 必填(P0-2 路径边界校验 + v0.2.2 C-1 schema 必填集);`target_project` 仅在 `target_bucket = 01-projects` 时必填,其他 bucket(02-areas / 03-resources / 04-archives)允许为 null。`frontmatter.project` 在非 projects 类落地时应为 null。schema 完整字段见 [CLAUDE.md §6.3](CLAUDE.md) + [docs/v0.2-plan.md §5.3 步骤 2.3](docs/v0.2-plan.md)。
 
 ### 3.4 用 AI 编程助手跑一次
 

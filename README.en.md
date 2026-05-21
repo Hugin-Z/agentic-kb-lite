@@ -121,6 +121,67 @@ explicit_mappings:
     reason: "Directory mentions a project name but content is contracts; areas fits better"
 ```
 
+#### routing_plan.json sample (AI output schema reference)
+
+After `scan-only` runs, the AI produces a `routing_plan.json` that looks like this (5-item simplified sample covering typical scenarios):
+
+```json
+{
+  "src_root": "D:/workdir/smart-city-viz-platform",
+  "plan_timestamp": "2026-05-22T10:00:00",
+  "ai_judgment_summary": "Top dir → 01-projects; standards/ detached to 03-resources/national-standards with project prefix; minutes/ stays in project 03-纪要/; delivered/ → 04-archives; explicit_mappings hit on 1 item",
+  "items": [
+    {
+      "src_abs": "D:/workdir/smart-city-viz-platform/master-plan.docx",
+      "target_bucket": "01-projects",
+      "target_project": "smart-city-viz-platform",
+      "target_subdir": "01-方案",
+      "target_filename": "master-plan.docx",
+      "frontmatter": {"type": "方案", "date": "2026-03-15", "project": "smart-city-viz-platform", "tags": []},
+      "ai_reason": "Step D: filename contains 'master-plan' + project top-level → 01-方案/"
+    },
+    {
+      "src_abs": "D:/workdir/smart-city-viz-platform/standards/CIM-tech-spec.pdf",
+      "target_bucket": "03-resources",
+      "target_project": null,
+      "target_subdir": "国标行标",
+      "target_filename": "smart-city-viz-platform_CIM-tech-spec.pdf",
+      "frontmatter": {"type": "国标", "date": "2024-12-01", "project": null, "tags": ["CIM"]},
+      "ai_reason": "Step C: standards/ subdir = cross-project reusable → detach to 03-resources/国标行标/; target_filename adds project prefix for disambiguation"
+    },
+    {
+      "src_abs": "D:/workdir/smart-city-viz-platform/minutes/2026-03-10-client-sync.docx",
+      "target_bucket": "01-projects",
+      "target_project": "smart-city-viz-platform",
+      "target_subdir": "03-纪要",
+      "target_filename": "2026-03-10-client-sync.docx",
+      "frontmatter": {"type": "纪要", "date": "2026-03-10", "project": "smart-city-viz-platform", "tags": []},
+      "ai_reason": "Step D: parent dir 'minutes/' + filename contains date → 03-纪要/ (date from filename)"
+    },
+    {
+      "src_abs": "D:/workdir/smart-city-viz-platform/delivered/acceptance-report.pdf",
+      "target_bucket": "04-archives",
+      "target_project": null,
+      "target_subdir": "smart-city-viz-platform",
+      "target_filename": "acceptance-report.pdf",
+      "frontmatter": {"type": "验收", "date": "2025-12-20", "project": "smart-city-viz-platform", "tags": ["delivered"]},
+      "ai_reason": "Step B: parent dir contains 'delivered' → 04-archives/ (archives_hint match)"
+    },
+    {
+      "src_abs": "D:/workdir/smart-city-viz-platform/contracts/some-contract.pdf",
+      "target_bucket": "02-areas",
+      "target_project": null,
+      "target_subdir": "合同档案",
+      "target_filename": "smart-city-viz-platform_some-contract.pdf",
+      "frontmatter": {"type": "合同", "date": "2026-01-15", "project": null, "tags": ["contracts"]},
+      "ai_reason": "Step A: explicit_mappings hit ('contract-package' → 02-areas/合同档案/); skip Steps B-D"
+    }
+  ]
+}
+```
+
+**Note**: each item's `src_abs` / `target_bucket` / `target_subdir` / `target_filename` / `frontmatter` / `ai_reason` are required (P0-2 path boundary check + v0.2.2 C-1 schema required set); `target_project` is required **only when `target_bucket = 01-projects`**, other buckets (02-areas / 03-resources / 04-archives) allow null. `frontmatter.project` should be null for non-projects bucket placements. Full field schema in [CLAUDE.md §6.3](CLAUDE.md) + [docs/v0.2-plan.md §5.3 step 2.3](docs/v0.2-plan.md).
+
 ### 3.4 Run it with the AI coding assistant
 
 Open the AI coding assistant (Claude Code as an example) in the repo root and ask:
