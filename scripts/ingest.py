@@ -528,71 +528,114 @@ def is_temp_or_hidden(name, src_path=None):
 # 包含 ".."、绝对路径前缀、路径分隔符等危险字段;统一在拼路径前拒绝
 ALLOWED_BUCKETS = {"01-projects", "02-areas", "03-resources", "04-archives"}
 
-# v0.2.2 C-1:plan item schema 必填字段(任一缺失 → ERROR_INVALID_PLAN_ITEM,不中断其他 items)
-# target_subdir 在 v0.2.1 表面"可空",但 _build_target_dir 当 01-projects 时强制访问 item["target_subdir"]
-# 会 KeyError 崩溃 → 收紧为必填;非 projects 类(02-areas/03-resources/04-archives)若缺 subdir
-# 会落到 bucket 根目录,语义模糊,同样要求必填
+# v0.2.2 Codex-5th 系统性升级:从"打补丁式扩字段"升到完整三层校验
+#   (key 存在 + 类型正确 + 非空),避免下轮 Codex 再发现 ai_reason 空串 /
+#   target_filename 非 str / frontmatter null 等同类问题
 #
-# v0.2.2 Codex-4th 收口:扩到 6 字段,与 README/README.en/CLAUDE.md §6.3 + process_file_with_explicit_target
-# docstring(line ~621)声明的"6 字段必填"完全对齐。frontmatter / ai_reason 缺任一字段都拒。
-# 语义说明:
-#   - 校验只看"key 是否存在",不强制非 null:frontmatter=null 或 frontmatter={} 都通过(下游
-#     `item.get("frontmatter") or {}` 把 null 视同 {});ai_reason=null 也通过(AI 推理字符串
-#     可空,实际由 AI 写入空字符串或描述)
-#   - 这跟 target_project=null 在非 projects bucket 合法的设计一致(null = "明示无值",不是
-#     "字段未提供")
-REQUIRED_FIELDS = {
-    "src_abs",
-    "target_bucket",
-    "target_subdir",
-    "target_filename",
-    "frontmatter",
-    "ai_reason",
+# 演进史:
+#   v0.2.1 P0-2:加 src_abs / target_bucket / target_filename 必填(key 存在)
+#   v0.2.2 C-1:加 target_subdir(key 存在)+ 01-projects 时 target_project 必填
+#   v0.2.2 Codex-4th:加 frontmatter / ai_reason(key 存在)
+#   v0.2.2 Codex-5th(本轮):升级为 SCHEMA dict + 三层校验
+#
+# 三层语义:
+#   1. key 存在:字段名 in item.keys()
+#   2. 类型正确:isinstance(item[field], schema["type"])
+#   3. 非空(仅 non_empty=True 时):
+#        - str 类型:value.strip() 非空
+#        - dict 类型:不强制(空 {} 合法 — frontmatter 可缺 type/date/project/tags 全字段)
+#
+#   特殊规则:
+#     - src_abs:必须是绝对路径(Path(...).is_absolute())
+#     - target_bucket:必须在 ALLOWED_BUCKETS 白名单
+#     - target_project:仅当 target_bucket=01-projects 时必填且非空
+#     - 路径穿越:沿用 P0-2 _check_path_component 对 project/subdir/filename 字段
+REQUIRED_FIELDS_SCHEMA = {
+    "src_abs":         {"type": str,  "non_empty": True},
+    "target_bucket":   {"type": str,  "non_empty": True},
+    "target_subdir":   {"type": str,  "non_empty": True},
+    "target_filename": {"type": str,  "non_empty": True},
+    "frontmatter":     {"type": dict, "non_empty": False},  # 空 dict {} 合法
+    "ai_reason":       {"type": str,  "non_empty": True},
 }
 
 
 def _validate_plan_item_paths(item: dict) -> None:
-    """v0.2.1 P0-2 / v0.2.2 C-1:对 plan item 做 schema + 路径边界双重校验。
-    失败抛 ValueError(message 含字段名 + 触发原因);execute_plan 调用方 catch 后转 ERROR_INVALID_PLAN_ITEM。"""
+    """v0.2.2 Codex-5th:对 plan item 做完整 3 层校验 + 路径边界校验。
+    三层 = key 存在 + 类型正确 + 非空;路径边界 = src_abs 绝对路径 + bucket 白名单 +
+    target_project 条件必填 + 路径穿越(.. / 绝对路径前缀 / 单层限制)。
+    失败抛 ValueError(message 含字段名 + 触发原因);execute_plan 调用方 catch
+    后转 ERROR_INVALID_PLAN_ITEM,不中断其他 items。"""
 
-    # v0.2.2 C-1:schema 校验(必填字段 + 01-projects 时 target_project 必填)
-    missing = REQUIRED_FIELDS - set(item.keys())
-    if missing:
-        raise ValueError(f"plan item 缺必填字段 {sorted(missing)}, src_abs={item.get('src_abs')}")
+    # ====================== Layer 1+2+3:key 存在 + 类型 + 非空 ======================
+    for field, rules in REQUIRED_FIELDS_SCHEMA.items():
+        # Layer 1: key 存在
+        if field not in item:
+            raise ValueError(f"missing required field: {field}")
 
-    bucket = item.get("target_bucket")
+        value = item[field]
+        expected_type = rules["type"]
+
+        # Layer 2: 类型正确
+        if not isinstance(value, expected_type):
+            raise ValueError(
+                f"field '{field}' must be {expected_type.__name__}, "
+                f"got {type(value).__name__}: {value!r}"
+            )
+
+        # Layer 3: 非空(仅 str + non_empty=True 时;dict 类型不强制非空)
+        if rules["non_empty"] and isinstance(value, str) and not value.strip():
+            raise ValueError(f"field '{field}' must not be empty string (got: {value!r})")
+
+    # ====================== Layer 4:字段特殊规则 ======================
+
+    # src_abs 必须是绝对路径
+    src_path = Path(item["src_abs"])
+    if not src_path.is_absolute():
+        raise ValueError(f"src_abs must be absolute path, got: {item['src_abs']!r}")
+
+    # target_bucket 白名单
+    bucket = item["target_bucket"]
     if bucket not in ALLOWED_BUCKETS:
-        raise ValueError(f"target_bucket 不在白名单 {sorted(ALLOWED_BUCKETS)}: {bucket!r}")
-
-    # v0.2.2 C-1:01-projects bucket 必须有 target_project(_build_target_dir 强制访问)
-    if bucket == "01-projects" and not item.get("target_project"):
         raise ValueError(
-            f"01-projects bucket requires target_project, src_abs={item.get('src_abs')}"
+            f"target_bucket '{bucket}' not in whitelist {sorted(ALLOWED_BUCKETS)}"
         )
 
-    def _check_path_component(field_name: str, value: str | None, allow_subpath: bool = False) -> None:
+    # 01-projects bucket 必须有非空 target_project
+    if bucket == "01-projects":
+        tp = item.get("target_project")
+        if not isinstance(tp, str) or not tp.strip():
+            raise ValueError(
+                f"01-projects bucket requires non-empty target_project, "
+                f"got: {tp!r}"
+            )
+
+    # ====================== Layer 5:路径穿越校验(沿用 P0-2)======================
+
+    def _check_path_component(field_name: str, value, allow_subpath: bool = False) -> None:
+        """检测 .. / 绝对路径前缀 / 路径分隔符(单层 vs 多级);
+        value 已在 Layer 1-3 保证为合法 str(非空);target_project 可能为 None(非 01-projects 时),特别处理。"""
         if value is None or value == "":
-            return
-        if not isinstance(value, str):
-            raise ValueError(f"{field_name} 不是字符串: {type(value).__name__}={value!r}")
+            return  # target_project 在非 01-projects 时允许 None
         if ".." in value.split("/") or ".." in value.split("\\"):
-            raise ValueError(f"{field_name} 含 '..' 路径段: {value!r}")
-        # 绝对路径前缀(Windows 盘符 / POSIX 根)
+            raise ValueError(f"{field_name} contains '..' path traversal segment: {value!r}")
+        # Windows 盘符 / POSIX 根
         if len(value) >= 2 and value[1] == ":":
-            raise ValueError(f"{field_name} 含 Windows 盘符绝对路径前缀: {value!r}")
+            raise ValueError(f"{field_name} contains absolute path prefix (Windows drive): {value!r}")
         if value.startswith("/") or value.startswith("\\"):
-            raise ValueError(f"{field_name} 以路径分隔符开头(绝对路径): {value!r}")
-        # 路径分隔符:filename / project 不允许;subdir 允许内部 / 作为多级子目录
+            raise ValueError(f"{field_name} starts with path separator (absolute path): {value!r}")
+        # 路径分隔符:filename / project 不允许;subdir 允许内部 / 作为多级
         if not allow_subpath:
             if "/" in value or "\\" in value:
-                raise ValueError(f"{field_name} 含路径分隔符(必须是单层): {value!r}")
+                raise ValueError(f"{field_name} contains path separator (must be single-level): {value!r}")
 
     _check_path_component("target_project", item.get("target_project"), allow_subpath=False)
-    _check_path_component("target_subdir", item.get("target_subdir"), allow_subpath=True)
-    _check_path_component("target_filename", item.get("target_filename"), allow_subpath=False)
+    _check_path_component("target_subdir", item["target_subdir"], allow_subpath=True)
+    _check_path_component("target_filename", item["target_filename"], allow_subpath=False)
 
-    if not item.get("target_filename"):
-        raise ValueError("target_filename 不能为空")
+
+# v0.2.2 Codex-4th 历史别名(REQUIRED_FIELDS):部分 progress.md 引用,保留向后兼容
+REQUIRED_FIELDS = set(REQUIRED_FIELDS_SCHEMA.keys())
 
 
 def _build_target_dir(item: dict) -> Path:
