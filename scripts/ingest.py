@@ -133,8 +133,11 @@ def inject_frontmatter(md_file: Path, frontmatter: dict) -> str:
     - 无 frontmatter:完整注入
     - frontmatter 格式坏:跳过(保守),返回 'malformed_preserved'
     返回 'injected_new' / 'merged_existing' / 'malformed_preserved' / 'no_change'
+
+    v0.2.2 C-2 顺手修:读用 utf-8-sig 容忍用户 hand-edit 后带 BOM 的 .md
+    (Windows Notepad 默认存 UTF-8 BOM);写仍用 utf-8 不带 BOM(标准产物)。
     """
-    content = md_file.read_text(encoding="utf-8")
+    content = md_file.read_text(encoding="utf-8-sig")
 
     if content.startswith("---\n"):
         end_marker = content.find("\n---\n", 4)
