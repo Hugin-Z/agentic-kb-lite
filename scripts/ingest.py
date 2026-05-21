@@ -520,19 +520,70 @@ def is_temp_or_hidden(name, src_path=None):
 # ====================== v0.2 重构:process_file_with_explicit_target ======================
 
 
+# v0.2.1 P0-2:execute_plan 路径边界校验
+# 防御 malformed routing_plan.json — AI 产出有可能(尤其是 jailbreak / 错配 prompts 时)
+# 包含 ".."、绝对路径前缀、路径分隔符等危险字段;统一在拼路径前拒绝
+ALLOWED_BUCKETS = {"01-projects", "02-areas", "03-resources", "04-archives"}
+
+
+def _validate_plan_item_paths(item: dict) -> None:
+    """v0.2.1 P0-2:对 plan item 的 bucket / project / subdir / filename 做路径边界校验。
+    失败抛 ValueError(message 含字段名 + 触发原因);execute_plan 调用方 catch 后转 ERROR_INVALID_PLAN_ITEM。"""
+
+    bucket = item.get("target_bucket")
+    if bucket not in ALLOWED_BUCKETS:
+        raise ValueError(f"target_bucket 不在白名单 {sorted(ALLOWED_BUCKETS)}: {bucket!r}")
+
+    def _check_path_component(field_name: str, value: str | None, allow_subpath: bool = False) -> None:
+        if value is None or value == "":
+            return
+        if not isinstance(value, str):
+            raise ValueError(f"{field_name} 不是字符串: {type(value).__name__}={value!r}")
+        if ".." in value.split("/") or ".." in value.split("\\"):
+            raise ValueError(f"{field_name} 含 '..' 路径段: {value!r}")
+        # 绝对路径前缀(Windows 盘符 / POSIX 根)
+        if len(value) >= 2 and value[1] == ":":
+            raise ValueError(f"{field_name} 含 Windows 盘符绝对路径前缀: {value!r}")
+        if value.startswith("/") or value.startswith("\\"):
+            raise ValueError(f"{field_name} 以路径分隔符开头(绝对路径): {value!r}")
+        # 路径分隔符:filename / project 不允许;subdir 允许内部 / 作为多级子目录
+        if not allow_subpath:
+            if "/" in value or "\\" in value:
+                raise ValueError(f"{field_name} 含路径分隔符(必须是单层): {value!r}")
+
+    _check_path_component("target_project", item.get("target_project"), allow_subpath=False)
+    _check_path_component("target_subdir", item.get("target_subdir"), allow_subpath=True)
+    _check_path_component("target_filename", item.get("target_filename"), allow_subpath=False)
+
+    if not item.get("target_filename"):
+        raise ValueError("target_filename 不能为空")
+
+
 def _build_target_dir(item: dict) -> Path:
-    """从 plan item 构造 corpus 内 target_dir 绝对路径。"""
+    """从 plan item 构造 corpus 内 target_dir 绝对路径。
+    调用前必须先经 `_validate_plan_item_paths` 校验(P0-2)。
+    末尾再 resolve + 边界 sanity check:确保拼出来的路径在 CORPUS 内。"""
     bucket = item["target_bucket"]
     parts = [bucket]
     if bucket == "01-projects":
         parts.append(item["target_project"])
         parts.append(item["target_subdir"])
     else:
-        # 02-areas / 03-resources / 04-archives:target_subdir 可能是多级(如 'areas/产品方案库')
+        # 02-areas / 03-resources / 04-archives:target_subdir 可能是多级(如 '产品方案库/子目录')
         sub = item.get("target_subdir") or ""
         if sub:
             parts.extend(sub.strip("/").split("/"))
-    return CORPUS.joinpath(*parts)
+    target_dir = CORPUS.joinpath(*parts)
+    # 二次防御:resolve 后必须在 CORPUS 内(若校验已拒 .. 则此步永真,但保留作 defense in depth)
+    corpus_resolved = CORPUS.resolve()
+    target_resolved = target_dir.resolve()
+    try:
+        target_resolved.relative_to(corpus_resolved)
+    except ValueError:
+        raise ValueError(
+            f"target 路径不在 corpus 内: {target_resolved} (corpus={corpus_resolved})"
+        )
+    return target_dir
 
 
 def _scene_label(item: dict) -> str:
@@ -911,6 +962,23 @@ def execute_plan(plan_file: Path, dry_run: bool = False) -> dict:
         print(f"# log: {INGEST_LOG.relative_to(REPO).as_posix()}")
 
     for i, item in enumerate(items, 1):
+        # v0.2.1 P0-2:路径边界校验在每个 item 上单独执行,失败转 ERROR_INVALID_PLAN_ITEM 不中断其他 items
+        try:
+            _validate_plan_item_paths(item)
+        except ValueError as e:
+            src_abs = item.get("src_abs", "(unknown)")
+            rec = make_record(
+                Path(src_abs) if isinstance(src_abs, str) else Path("(unknown)"),
+                None, "ERROR_INVALID_PLAN_ITEM", "v0.2.1-P0-2-validation",
+                0, None, f"plan items[{i-1}] 路径边界校验失败: {e}",
+            )
+            results.append(rec)
+            print(f"[{i}/{len(items)}] ERROR_INVALID_PLAN_ITEM: {Path(src_abs).name if isinstance(src_abs, str) else src_abs}")
+            print(f"    reason: {e}")
+            if not dry_run:
+                log_action(rec)
+            continue
+
         rec = process_file_with_explicit_target(item, dry_run, md_engine_holder,
                                                  incremental=True, log_records=log_records)
         results.append(rec)
