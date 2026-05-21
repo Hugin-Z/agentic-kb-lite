@@ -120,6 +120,67 @@ explicit_mappings:
     reason: "目录虽含项目名,但内容是合同文档,归 areas 更合适"
 ```
 
+#### routing_plan.json 样例(AI 产出格式参考)
+
+AI 跑完 `scan-only` 后产出的 `routing_plan.json` 长这样(5 items 简化示例,覆盖典型场景):
+
+```json
+{
+  "src_root": "D:/工作目录/智慧城市可视化平台",
+  "plan_timestamp": "2026-05-22T10:00:00",
+  "ai_judgment_summary": "顶层判为 01-projects;标准/ 脱钩到 03-resources/国标行标 + 项目前缀消歧;纪要/ 留在项目内 03-纪要/;已交付/ 进 04-archives;explicit_mappings 命中覆盖 1 条",
+  "items": [
+    {
+      "src_abs": "D:/工作目录/智慧城市可视化平台/总体方案.docx",
+      "target_bucket": "01-projects",
+      "target_project": "智慧城市可视化平台",
+      "target_subdir": "01-方案",
+      "target_filename": "总体方案.docx",
+      "frontmatter": {"type": "方案", "date": "2026-03-15", "project": "智慧城市可视化平台", "tags": []},
+      "ai_reason": "Step D:文件名含'方案' + 项目顶层 → 01-方案/"
+    },
+    {
+      "src_abs": "D:/工作目录/智慧城市可视化平台/标准/CIM技术规范.pdf",
+      "target_bucket": "03-resources",
+      "target_project": null,
+      "target_subdir": "国标行标",
+      "target_filename": "智慧城市可视化平台_CIM技术规范.pdf",
+      "frontmatter": {"type": "国标", "date": "2024-12-01", "project": null, "tags": ["CIM"]},
+      "ai_reason": "Step C:标准/ 子目录 = 跨项目可复用 → 脱钩到 03-resources/国标行标/;target_filename 加项目前缀消歧"
+    },
+    {
+      "src_abs": "D:/工作目录/智慧城市可视化平台/纪要/2026-03-10客户沟通.docx",
+      "target_bucket": "01-projects",
+      "target_project": "智慧城市可视化平台",
+      "target_subdir": "03-纪要",
+      "target_filename": "2026-03-10客户沟通.docx",
+      "frontmatter": {"type": "纪要", "date": "2026-03-10", "project": "智慧城市可视化平台", "tags": []},
+      "ai_reason": "Step D:父目录'纪要/' + 文件名含日期 → 03-纪要/(date 取文件名)"
+    },
+    {
+      "src_abs": "D:/工作目录/智慧城市可视化平台/已交付/初验报告.pdf",
+      "target_bucket": "04-archives",
+      "target_project": null,
+      "target_subdir": "智慧城市可视化平台",
+      "target_filename": "初验报告.pdf",
+      "frontmatter": {"type": "验收", "date": "2025-12-20", "project": "智慧城市可视化平台", "tags": ["已交付"]},
+      "ai_reason": "Step B:父目录名含'已交付' → 04-archives/(archives_hint 命中)"
+    },
+    {
+      "src_abs": "D:/工作目录/智慧城市可视化平台/合同/某合同.pdf",
+      "target_bucket": "02-areas",
+      "target_project": null,
+      "target_subdir": "合同档案",
+      "target_filename": "智慧城市可视化平台_某合同.pdf",
+      "frontmatter": {"type": "合同", "date": "2026-01-15", "project": null, "tags": ["合同档案"]},
+      "ai_reason": "Step A:explicit_mappings 命中('某客户合同包' → 02-areas/合同档案/);跳过 Step B-D 常规判断"
+    }
+  ]
+}
+```
+
+**说明**:每个 item 的 `src_abs` / `target_bucket` / `target_filename` 必填(P0-2 路径边界校验);`target_project` 仅 01-projects 必填;`frontmatter.project` 在非 projects 类落地时应为 null。schema 完整字段见 [CLAUDE.md §6.3](CLAUDE.md) + [docs/v0.2-plan.md §5.3 步骤 2.3](docs/v0.2-plan.md)。
+
 ### 3.4 用 AI 编程助手跑一次
 
 打开 AI 编程助手(以 Claude Code 为例),在仓库根目录提问:
