@@ -537,6 +537,38 @@ def assert_15_family_key_invalid_char_rejected() -> None:
             f"应被 Layer 6.3 拒,不应是 Layer 6.2 白名单拒\nstdout:\n{proc.stdout[:800]}"
     finally:
         Path(plan_file).unlink(missing_ok=True)
+
+    # archives bucket 不走 tier:即使给 tier=versions 且缺 family_key,也应忽略 tier,
+    # 不触发 Layer 6.3,物理路径保持 04-archives 下的普通路径。
+    archive_plan = {
+        "plan_schema_version": "v0.3",
+        "src_root": "smoke_test",
+        "items": [{
+            "src_abs": str(REPO / "README.md"),
+            "target_bucket": "04-archives",
+            "target_project": "_v03_smoke_archive_",
+            "target_subdir": "01-方案",
+            "target_filename": "archive.md",
+            "frontmatter": {},
+            "ai_reason": "smoke_test archives bucket ignores tier",
+            "tier": "versions",
+        }],
+    }
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False, encoding="utf-8") as f:
+        json.dump(archive_plan, f, ensure_ascii=False)
+        archive_plan_file = f.name
+    try:
+        proc = _run([PY, str(REPO / "scripts" / "ingest.py"), "execute-plan", archive_plan_file, "--dry-run"])
+        assert "ERROR_INVALID_PLAN_ITEM" not in proc.stdout, \
+            f"archives bucket 应忽略 tier,不应触发 Layer 6.3\nstdout:\n{proc.stdout[:800]}"
+        assert "DRY_RUN_TEXT" in proc.stdout, \
+            f"archives bucket dry-run 应正常处理\nstdout:\n{proc.stdout[:800]}"
+        assert "corpus/04-archives/_v03_smoke_archive_/archive.md" in proc.stdout, \
+            f"archives bucket 不应落 .shelved,应保持普通 04-archives 路径\nstdout:\n{proc.stdout[:800]}"
+        assert ".shelved" not in proc.stdout, \
+            f"archives bucket 不走 tier,stdout 不应含 .shelved\nstdout:\n{proc.stdout[:800]}"
+    finally:
+        Path(archive_plan_file).unlink(missing_ok=True)
     print("✓")
 
 

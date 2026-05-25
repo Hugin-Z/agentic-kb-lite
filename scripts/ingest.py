@@ -672,7 +672,9 @@ def _validate_plan_item_paths(item: dict, plan_schema_version: str | None = None
     _check_path_component("target_filename", item["target_filename"], allow_subpath=False)
 
     # ====================== Layer 6:tier 字段校验(v0.3 阶段 1)======================
-    _validate_tier_field(item, plan_schema_version)
+    # archives 是 PARA 归档层,不再二次分 tier;即使 plan 给 tier/family_key 也忽略。
+    if bucket != "04-archives":
+        _validate_tier_field(item, plan_schema_version)
 
 
 # v0.2.2 Codex-4th 历史别名(REQUIRED_FIELDS):部分 progress.md 引用,保留向后兼容
@@ -847,11 +849,17 @@ def process_file_with_explicit_target(item: dict, dry_run: bool, md_engine_holde
     # - tier 缺省默认 normal(v0.2 旧 plan 兜底);用 setdefault 不覆盖 AI 在 plan 里手填的同名字段
     # - kb_default_search:canonical / normal = True;working / versions / assets = False
     # - family_key 仅 tier=versions 时写;其他 tier 不写(frontmatter 保持简洁)
-    tier = item.get("tier", "normal")
-    frontmatter.setdefault("kb_tier", tier)
-    frontmatter.setdefault("kb_default_search", tier in ("canonical", "normal"))
-    if tier == "versions":
-        frontmatter.setdefault("family_key", item.get("family_key"))
+    if item["target_bucket"] == "04-archives":
+        tier = "normal"
+        frontmatter["kb_tier"] = "normal"
+        frontmatter["kb_default_search"] = True
+        frontmatter.pop("family_key", None)
+    else:
+        tier = item.get("tier", "normal")
+        frontmatter.setdefault("kb_tier", tier)
+        frontmatter.setdefault("kb_default_search", tier in ("canonical", "normal"))
+        if tier == "versions":
+            frontmatter.setdefault("family_key", item.get("family_key"))
 
     # 同名冲突
     if target_src.exists():

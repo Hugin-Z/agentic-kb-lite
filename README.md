@@ -253,7 +253,7 @@ AI 会按 [CLAUDE.md](CLAUDE.md) 工作流跑 ingest(G14/G15/G16/G18 分流)+ ag
 默认 `search.py` 不搜 `.shelved/` 与 `.archive/` 内容(噪声分离)。追溯时加 `--deep`:
 
 ```bash
-python scripts/search.py --scope all --terms "之前的 build 脚本 草稿" --deep
+python scripts/search.py --scope all --terms "previous build script draft" --deep
 ```
 
 `--deep` 同时去掉 glob 排除 + 给 rg 加 `--hidden`(真扫隐藏目录;v0.3.0 阶段 4A W-v0.3-阶段3-W1 修)。用户问"之前 / 历史 / 草稿 / 版本 / 旧 / 过程 / 脚本"等关键词时,LLM 倾向加 `--deep`。详见 [CLAUDE.md §5.6.4](CLAUDE.md)。
