@@ -594,18 +594,25 @@ def assert_16_deep_flag_three_buckets() -> None:
             f"默认搜 shelved 应 0 命中(应被 .shelved/** glob 排除)\nstdout:\n{proc2.stdout[:1500]}"
 
         # 跑 3:--deep 搜 shelved 关键词 → 应命中(三 bucket 都命中)
+        # v0.3 阶段 4A W-v0.3-阶段3-W1 修:加强断言,不能用 "keyword in stdout"(误判:search.py
+        # 在"未命中检索词"段也 echo keyword)和 "bucket name in stdout"(误判:"搜索范围"行
+        # 含所有 bucket 路径)。改用具体命中文件数 + 命中文件路径含 .shelved 双判定。
         proc3 = _run(search + ["--scope", "all", "--terms", UNIQUE_SHELVED, "--deep"])
         assert proc3.returncode == 0, f"search shelved --deep exit={proc3.returncode}\nstderr:\n{proc3.stderr}"
-        assert UNIQUE_SHELVED in proc3.stdout, \
-            f"--deep 搜 shelved 应命中关键词\nstdout:\n{proc3.stdout[:800]}"
-        # --deep 时不应输出排除提示
+        # 主判定:命中文件数 ≥ 3(三 bucket 各 1 个 .shelved/working/working_demo.md)
+        # search.py 输出格式 "- **命中文件**: N (正文 N + stub 0)"
+        import re
+        m = re.search(r"\*\*命中文件\*\*:\s*(\d+)", proc3.stdout)
+        assert m, f"--deep 输出无 '命中文件: N' 统计行\nstdout:\n{proc3.stdout[:1500]}"
+        deep_hits = int(m.group(1))
+        assert deep_hits >= 3, \
+            f"--deep 应在三 bucket 各命中一次(共 ≥ 3 文件),实际命中 {deep_hits}\nstdout:\n{proc3.stdout[:1500]}"
+        # 辅判定 1:命中文件路径段含 .shelved(`### corpus/.../.shelved/working/working_demo.md`)
+        assert ".shelved" in proc3.stdout, \
+            f"--deep 命中文件路径应含 '.shelved' 段\nstdout:\n{proc3.stdout[:1500]}"
+        # 辅判定 2:--deep 时不应输出排除提示
         assert "默认检索已排除 .shelved" not in proc3.stdout, \
             f"--deep 时不应输出 .shelved 排除提示\nstdout:\n{proc3.stdout[:600]}"
-        # 验证三 bucket 都命中(基本检查:stdout 含 01-projects/02-areas/03-resources 三个路径前缀)
-        hit_buckets = sum(1 for b in ["01-projects", "02-areas", "03-resources"]
-                          if b in proc3.stdout)
-        assert hit_buckets == 3, \
-            f"--deep 应在三 bucket 各命中一次,实际命中 {hit_buckets} bucket\nstdout:\n{proc3.stdout[:1500]}"
     finally:
         for root in cleanups:
             if root.exists():

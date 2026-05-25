@@ -125,10 +125,17 @@ def run_rg(rg, terms, dirs, context, regex=False, no_stub=False, deep=False):
     避免后处理过滤后 per_term_hits 与 files 计数不一致(误导 LLM 回退判断)。
 
     v0.3 阶段 3:默认 glob 加 !.shelved/**(沿用 !.archive/** 同款);--deep 时
-    两个排除都不加,允许命中 .shelved/.archive 内容(追溯过程材料/旧版本/素材)。"""
+    两个排除都不加,允许命中 .shelved/.archive 内容(追溯过程材料/旧版本/素材)。
+
+    v0.3 阶段 4A 修(阶段 3 W1 真 bug):rg 默认跳过隐藏目录(.shelved 以 . 开头),
+    所以 --deep 时**必须加 --hidden** rg 才会真的扫 .shelved/.archive 内容;
+    没 --hidden 时 --deep 只是把 glob 排除拿掉,但 rg 默认还是不进 .shelved。
+    """
     args = [rg, "--json", "-i", "-C", str(context),
             "--glob", "!.references.md"]
-    if not deep:
+    if deep:
+        args.append("--hidden")  # v0.3 阶段 4A:让 rg 进入 .shelved / .archive 隐藏目录
+    else:
         args.extend([
             "--glob", "!.shelved/**",   # v0.3 新增
             "--glob", "!.archive/**",   # v0.2.x 沿用
@@ -155,12 +162,15 @@ def run_rg(rg, terms, dirs, context, regex=False, no_stub=False, deep=False):
 
 def per_term_hits(rg, terms, dirs, regex=False, no_stub=False, deep=False):
     """v0.2.1 P1-8: 同 run_rg 透传 --no-stub,确保 per_term_hits 与 files 共享 glob。
-    v0.3 阶段 3:同步 --deep 排除策略(默认排除 .shelved/.archive,--deep 包含)。"""
+    v0.3 阶段 3:同步 --deep 排除策略(默认排除 .shelved/.archive,--deep 包含)。
+    v0.3 阶段 4A:同 run_rg --deep 加 --hidden 让 rg 真扫隐藏目录(W-v0.3-阶段3-W1 修)。"""
     hits = {}
     for t in terms:
         args = [rg, "-l", "-i",
                 "--glob", "!.references.md"]
-        if not deep:
+        if deep:
+            args.append("--hidden")  # v0.3 阶段 4A W-v0.3-阶段3-W1 修
+        else:
             args.extend([
                 "--glob", "!.shelved/**",   # v0.3 新增
                 "--glob", "!.archive/**",   # v0.2.x 沿用
