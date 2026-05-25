@@ -576,6 +576,31 @@ find corpus -type d -name "*.frames" | wc -l
 - 无前缀但内容明确 → 用 Read 看前 20 行,按内容判断
 - 实在判断不出 → `99-其他/`
 
+#### Step E: tier 判定(v0.3 新增,适用 projects + areas + resources 三 bucket)
+
+对每个 plan item 落定 `target_bucket / target_subdir / target_filename` 后,判断 `tier`。
+
+**适用范围**:
+
+- `01-projects` / `02-areas` / `03-resources` 三 bucket 都做 Step E
+- `04-archives` 跳过(已是 PARA 归档层,不需要再分 tier)
+
+**判定要点**:这个文件是**主知识**还是**过程 / 版本 / 素材**?
+
+- **canonical**(主知识 / 最终交付):文件名含 "最终" / "正文" / "建设方案" / "实施方案" / "需求说明书" / "研究报告" / "政策建议" / "审查要点" / "最终汇报";或父目录是 `01-方案/` 且内容明确是客户面前成品
+- **normal**(项目内一般材料):**默认值**,无明显 working/versions/assets 特征即 normal
+- **working**(过程材料):文件名前缀 `build_ / extract_ / dump_ / save_ / check_ / temp_ / test_ / demo_`;或父目录是 `临时 / 实验 / scripts / tools` 等
+- **versions**(旧版本):文件名含 `v1 / v2 / v3 / 旧 / 草稿`,同系列多份(同 baseline + 版本号变化);保留最高版本为 canonical/normal,其余进 versions + family_key
+- **assets**(原始素材):大量 png/jpg/mp4/shp/zip 或父目录是 `素材 / 截图 / 图片 / appendix_pages / 248_pages` 等
+
+**约束**(沿用 v0.2.0 AI 语义路由原则):
+
+- tier 判定**由 AI 在 routing_plan 阶段做出**,不写入 ingest.py 硬规则
+- AI 看文件名 + 父目录 + 内容上下文综合判,比正则更准
+- 模糊时优先 `normal`(保守 — normal 默认参与检索,误判到 working 会让材料失检索)
+- versions 类必填 `family_key`(基线名 + 类型,如 `总体方案_docx` / `需求说明书_pdf`);**不可含 Windows 非法字符 `< > : " | ? * \\ /`**(Layer 6.3 强制拒)
+- **v0.3 新 plan**:每个 item 必填 tier(顶层加 `"plan_schema_version": "v0.3"` 标记);**v0.2 旧 plan**:缺 tier 默认 normal(兜底)
+
 ### 6.3 输出 schema
 
 写到 `logs/routing_plan.json`。完整 schema 见 `docs/v0.2-plan.md` §5.3 步骤 2.3。

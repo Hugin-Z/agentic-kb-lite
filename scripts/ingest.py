@@ -587,10 +587,21 @@ REQUIRED_FIELDS_SCHEMA = {
 }
 
 
-def _validate_plan_item_paths(item: dict) -> None:
-    """v0.2.2 Codex-5th:对 plan item 做完整 3 层校验 + 路径边界校验。
-    三层 = key 存在 + 类型正确 + 非空;路径边界 = src_abs 绝对路径 + bucket 白名单 +
-    target_project 条件必填 + 路径穿越(.. / 绝对路径前缀 / 单层限制)。
+def _validate_plan_item_paths(item: dict, plan_schema_version: str | None = None) -> None:
+    """v0.2.2 Codex-5th + v0.3 阶段 1:对 plan item 做完整 6 层校验。
+
+    Layer 1-5(v0.2.2):
+      1. key 存在(REQUIRED_FIELDS_SCHEMA)
+      2. 类型正确
+      3. 非空
+      4. 字段特殊规则(src_abs 绝对路径 / bucket 白名单 / target_project 条件必填)
+      5. 路径穿越(.. / 绝对路径前缀 / 单层限制)
+
+    Layer 6(v0.3):tier 字段校验(_validate_tier_field)
+      6.1 必填判定(v0.3 新 plan 必填,v0.2 旧 plan 默认 normal)
+      6.2 类型 + 非空 + 白名单
+      6.3 family_key 校验(versions 类 + Windows 非法字符)
+
     失败抛 ValueError(message 含字段名 + 触发原因);execute_plan 调用方 catch
     后转 ERROR_INVALID_PLAN_ITEM,不中断其他 items。"""
 
@@ -660,9 +671,62 @@ def _validate_plan_item_paths(item: dict) -> None:
     _check_path_component("target_subdir", item["target_subdir"], allow_subpath=True)
     _check_path_component("target_filename", item["target_filename"], allow_subpath=False)
 
+    # ====================== Layer 6:tier 字段校验(v0.3 阶段 1)======================
+    _validate_tier_field(item, plan_schema_version)
+
 
 # v0.2.2 Codex-4th 历史别名(REQUIRED_FIELDS):部分 progress.md 引用,保留向后兼容
 REQUIRED_FIELDS = set(REQUIRED_FIELDS_SCHEMA.keys())
+
+
+# v0.3 阶段 1 步骤 1.1:tier 字段白名单 + Layer 6 三层校验
+# 详见 docs/v0.3-plan.md §4.3 步骤 1.4 + §1 决策快照"判定方式"行
+ALLOWED_TIERS = {"canonical", "normal", "working", "versions", "assets"}
+
+
+def _validate_tier_field(item: dict, plan_schema_version: str | None = None) -> None:
+    """Layer 6:tier 字段校验(v0.3 新增)
+
+    三层语义(详见 docs/v0.3-plan.md §4.3 步骤 1.4):
+      6.1 必填判定:plan_schema_version == 'v0.3' 时 tier 必填,缺则拒
+                  (v0.2 旧 plan 无 plan_schema_version → tier 缺默认 normal 兜底)
+      6.2 白名单 / 类型 / 非空:tier 给值时必须是非空 str + 在 ALLOWED_TIERS 内
+      6.3 family_key 校验:tier == 'versions' 时 family_key 必填非空 + 不含
+                          Windows 非法字符(< > : " | ? * \\ /)
+                          [Codex 第 7 条 v1.1 修订]
+    """
+    is_v03 = (plan_schema_version == "v0.3")
+    tier = item.get("tier")
+
+    # Layer 6.1:必填判定
+    if tier is None:
+        if is_v03:
+            raise ValueError(
+                "v0.3 plan_schema_version requires tier field (missing). "
+                "Set tier in {canonical, normal, working, versions, assets}."
+            )
+        return  # v0.2 兼容:tier 缺 → 默认 normal(_build_target_dir 兜底)
+
+    # Layer 6.2:类型 + 非空 + 白名单
+    if not isinstance(tier, str):
+        raise ValueError(f"tier must be str, got {type(tier).__name__}")
+    if not tier.strip():
+        raise ValueError("tier must not be empty string")
+    if tier not in ALLOWED_TIERS:
+        raise ValueError(f"tier '{tier}' not in whitelist {sorted(ALLOWED_TIERS)}")
+
+    # Layer 6.3:family_key 校验(仅 versions 类)
+    if tier == "versions":
+        fk = item.get("family_key")
+        if not isinstance(fk, str) or not fk.strip():
+            raise ValueError("tier='versions' requires non-empty family_key")
+        # v0.3 Codex-7:family_key 是路径段,Windows 非法字符必须拒
+        WIN_INVALID = set('<>:"|?*\\/')
+        bad = WIN_INVALID & set(fk)
+        if bad:
+            raise ValueError(
+                f"family_key contains Windows-invalid chars {sorted(bad)}: {fk!r}"
+            )
 
 
 def _build_target_dir(item: dict) -> Path:
@@ -732,7 +796,18 @@ def process_file_with_explicit_target(item: dict, dry_run: bool, md_engine_holde
     target_src = target_dir / prefixed_name
     target_rel = norm_path(target_src.relative_to(REPO))
     scene = _scene_label(item)
-    frontmatter = item.get("frontmatter") or {}
+    frontmatter = dict(item.get("frontmatter") or {})  # copy 避免污染 plan item
+
+    # v0.3 阶段 1 步骤 1.3:frontmatter 注入 3 字段(kb_tier / kb_default_search / family_key)
+    # 详见 docs/v0.3-plan.md §4.3 步骤 1.3 + §5.3 步骤 2.3
+    # - tier 缺省默认 normal(v0.2 旧 plan 兜底);用 setdefault 不覆盖 AI 在 plan 里手填的同名字段
+    # - kb_default_search:canonical / normal = True;working / versions / assets = False
+    # - family_key 仅 tier=versions 时写;其他 tier 不写(frontmatter 保持简洁)
+    tier = item.get("tier", "normal")
+    frontmatter.setdefault("kb_tier", tier)
+    frontmatter.setdefault("kb_default_search", tier in ("canonical", "normal"))
+    if tier == "versions":
+        frontmatter.setdefault("family_key", item.get("family_key"))
 
     # 同名冲突
     if target_src.exists():
@@ -1091,6 +1166,10 @@ def execute_plan(plan_file: Path, dry_run: bool = False) -> dict:
         sys.stderr.write(f"ERROR: plan 中没有 items\n")
         sys.exit(2)
 
+    # v0.3 阶段 1:读 plan_schema_version 顶层字段(标记新 plan,触发 Layer 6.1 必填判定)
+    # v0.2 旧 plan 无此字段 → Layer 6 走兜底(tier 缺默认 normal,不报错)
+    plan_schema_version = plan.get("plan_schema_version")
+
     # v0.2.2 C-1:schema 校验下沉到 _validate_plan_item_paths(per-item,失败转 ERROR_INVALID_PLAN_ITEM,
     # 不再 sys.exit;单 item bad 不阻塞其他 items 处理)
 
@@ -1105,7 +1184,7 @@ def execute_plan(plan_file: Path, dry_run: bool = False) -> dict:
     for i, item in enumerate(items, 1):
         # v0.2.1 P0-2:路径边界校验在每个 item 上单独执行,失败转 ERROR_INVALID_PLAN_ITEM 不中断其他 items
         try:
-            _validate_plan_item_paths(item)
+            _validate_plan_item_paths(item, plan_schema_version)
         except ValueError as e:
             src_abs = item.get("src_abs", "(unknown)")
             rec = make_record(
