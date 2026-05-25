@@ -1,7 +1,8 @@
-"""smoke_test.py — v0.2.2 最小自动化 smoke test(单文件 10 assert)
+"""smoke_test.py — v0.2.3 最小自动化 smoke test(单文件 12 assert)
 
-本脚本不引入 pytest 重型测试栈(轻量原则)。v0.2.2 Codex-5th 起 10 个核心 assert,
-覆盖主链路 + schema 3 层校验(key 存在 / 类型 / 非空)+ BOM 兼容 + 真实路径边界:
+本脚本不引入 pytest 重型测试栈(轻量原则)。v0.2.3 起 12 个核心 assert,覆盖
+主链路 + schema 3 层校验(key 存在 / 类型 / 非空)+ BOM 兼容 + 真实路径边界
++ 失败降级路径(markitdown_failed / unsupported_ext stub 化):
 
   1. search.py --help(install 烟测调用参数有效)
   2. ingest.py scan-only(走通基础流程)
@@ -13,10 +14,12 @@
   8. execute-plan 拒绝缺 ai_reason 的 plan(schema Layer 1 key 存在)
   9. execute-plan 拒绝 frontmatter 非 dict 的 plan(Codex-5th schema Layer 2 类型校验)
  10. execute-plan 拒绝 target_subdir / ai_reason 空字符串的 plan(Codex-5th schema Layer 3 非空校验)
+ 11. markitdown 失败降级 stub(v0.2.3 5th-3,不再 ERROR_MARKITDOWN_FAILED)
+ 12. 未知扩展名降级 stub(v0.2.3 5th-4,不再 ERROR_UNSUPPORTED_EXT)
 
 用法:
   python scripts/smoke_test.py
-退出码:0 = 全 4 个 assert 过;非 0 = 至少一个失败(stderr 写明哪个)
+退出码:0 = 12 个 assert 全过;非 0 = 至少一个失败(stderr 写明哪个)
 """
 from __future__ import annotations
 import json
@@ -38,7 +41,7 @@ def _run(args: list[str], **kw) -> subprocess.CompletedProcess:
 
 # ---------- Assert 1: search.py --help 返回 0(验证 install 调用参数有效)----------
 def assert_1_search_help() -> None:
-    print("[1/10] search.py --scope all --help (install 烟测调用参数)... ", end="")
+    print("[1/12] search.py --scope all --help (install 烟测调用参数)... ", end="")
     proc = _run([PY, str(REPO / "scripts" / "search.py"), "--scope", "all", "--help"])
     # --help 在 argparse 下 returncode=0 + stdout 含 usage
     assert proc.returncode == 0, f"search.py --help exit={proc.returncode}\nstderr:\n{proc.stderr}"
@@ -48,7 +51,7 @@ def assert_1_search_help() -> None:
 
 # ---------- Assert 2: scan-only 走通 + routing_request.json 生成 ----------
 def assert_2_scan_only() -> None:
-    print("[2/10] ingest.py scan-only corpus/.fixtures/E8_scope_routing/... ", end="")
+    print("[2/12] ingest.py scan-only corpus/.fixtures/E8_scope_routing/... ", end="")
     fixture = REPO / "corpus" / ".fixtures" / "E8_scope_routing"
     assert fixture.is_dir(), f"fixture 缺失: {fixture}"
     out = REPO / "logs" / "_smoke_test_routing_request.json"
@@ -67,7 +70,7 @@ def assert_2_scan_only() -> None:
 def assert_3_malformed_plan_rejected() -> None:
     """v0.2.2 Codex-5th 升级:6 字段全补齐,只让路径字段坏 — 这样错误是被路径校验
     拒,不是被 schema (REQUIRED_FIELDS) 拒(后者是 Layer 1,前者是 Layer 5)。"""
-    print("[3/10] execute-plan 真实拒 3 个路径边界 malformed plan(Layer 5 路径穿越)... ", end="")
+    print("[3/12] execute-plan 真实拒 3 个路径边界 malformed plan(Layer 5 路径穿越)... ", end="")
     base_fields = {
         "frontmatter": {},
         "ai_reason": "smoke_test 路径边界",
@@ -131,7 +134,7 @@ def assert_3_malformed_plan_rejected() -> None:
 
 # ---------- Assert 4: 关键依赖 import(docx + yaml + markitdown)----------
 def assert_4_imports() -> None:
-    print("[4/10] import docx + yaml + markitdown... ", end="")
+    print("[4/12] import docx + yaml + markitdown... ", end="")
     proc = _run([PY, "-c", "import docx; import yaml; import markitdown"])
     assert proc.returncode == 0, \
         f"关键依赖 import 失败 exit={proc.returncode}\nstderr:\n{proc.stderr}"
@@ -140,7 +143,7 @@ def assert_4_imports() -> None:
 
 # ---------- Assert 5: execute-plan 拒绝缺 target_subdir 的 plan (v0.2.2 C-1) ----------
 def assert_5_missing_subdir_rejected() -> None:
-    print("[5/10] execute-plan 拒绝缺 target_subdir 的 plan(schema Layer 1 key 存在)... ", end="")
+    print("[5/12] execute-plan 拒绝缺 target_subdir 的 plan(schema Layer 1 key 存在)... ", end="")
     bad_plan = {
         "src_root": "smoke_test",
         "items": [{
@@ -170,7 +173,7 @@ def assert_5_missing_subdir_rejected() -> None:
 
 # ---------- Assert 6: execute-plan 能读 UTF-8 BOM plan (v0.2.2 C-2) ----------
 def assert_6_utf8_bom_plan() -> None:
-    print("[6/10] execute-plan 读 UTF-8 BOM plan(BOM 兼容)... ", end="")
+    print("[6/12] execute-plan 读 UTF-8 BOM plan(BOM 兼容)... ", end="")
     fixture = REPO / "corpus" / ".fixtures" / "E8_scope_routing"
     sample_file = next((fixture / "01-projects").rglob("*.md"), None)
     assert sample_file is not None, "E8 fixture 内未找到 .md 文件作 src_abs"
@@ -205,7 +208,7 @@ def assert_6_utf8_bom_plan() -> None:
 
 # ---------- Assert 7: execute-plan 拒绝缺 frontmatter 的 plan (v0.2.2 Codex-4th-1) ----------
 def assert_7_missing_frontmatter_rejected() -> None:
-    print("[7/10] execute-plan 拒绝缺 frontmatter 的 plan(schema Layer 1 key 存在)... ", end="")
+    print("[7/12] execute-plan 拒绝缺 frontmatter 的 plan(schema Layer 1 key 存在)... ", end="")
     bad_plan = {
         "src_root": "smoke_test",
         "items": [{
@@ -234,7 +237,7 @@ def assert_7_missing_frontmatter_rejected() -> None:
 
 # ---------- Assert 8: execute-plan 拒绝缺 ai_reason 的 plan (v0.2.2 Codex-4th-1) ----------
 def assert_8_missing_ai_reason_rejected() -> None:
-    print("[8/10] execute-plan 拒绝缺 ai_reason 的 plan(schema Layer 1 key 存在)... ", end="")
+    print("[8/12] execute-plan 拒绝缺 ai_reason 的 plan(schema Layer 1 key 存在)... ", end="")
     bad_plan = {
         "src_root": "smoke_test",
         "items": [{
@@ -263,7 +266,7 @@ def assert_8_missing_ai_reason_rejected() -> None:
 
 # ---------- Assert 9: execute-plan 拒绝 frontmatter 非 dict (Codex-5th Layer 2 类型校验) ----------
 def assert_9_frontmatter_wrong_type_rejected() -> None:
-    print("[9/10] execute-plan 拒绝 frontmatter 非 dict 的 plan(Layer 2 类型校验)... ", end="")
+    print("[9/12] execute-plan 拒绝 frontmatter 非 dict 的 plan(Layer 2 类型校验)... ", end="")
     type_cases = [
         ("frontmatter=None", None),
         ("frontmatter=\"str\"", "string instead of dict"),
@@ -297,7 +300,7 @@ def assert_9_frontmatter_wrong_type_rejected() -> None:
 
 # ---------- Assert 10: execute-plan 拒绝空字符串字段 (Codex-5th Layer 3 非空校验) ----------
 def assert_10_empty_string_field_rejected() -> None:
-    print("[10/10] execute-plan 拒绝 target_subdir / ai_reason 空字符串(Layer 3 非空)... ", end="")
+    print("[10/12] execute-plan 拒绝 target_subdir / ai_reason 空字符串(Layer 3 非空)... ", end="")
     empty_cases = [
         ("target_subdir=\"\"", "target_subdir", ""),
         ("target_subdir=\"   \"", "target_subdir", "   "),  # strip 后空
@@ -330,8 +333,85 @@ def assert_10_empty_string_field_rejected() -> None:
     print("✓ (3 empty-string cases)")
 
 
+# ---------- Assert 11: markitdown 失败降级为 STUB_ONLY_MARKITDOWN_FAILED (v0.2.3 5th-3) ----------
+def assert_11_markitdown_failed_stub() -> None:
+    """风格说明:markitdown 对所有坏 binary 都极度容错 fallback 到 plain text 不报错,
+    无法通过 subprocess + 坏 fixture 模拟真实失败。这里改为**直接 import + 调函数**
+    验证 MARKITDOWN_FAILED_STUB 路径(make_stub rule_id + process_file except 分支)
+    的行为正确性。end-to-end 由 manual 验证补充(progress.md 落表)。"""
+    print("[11/12] markitdown 失败降级路径函数级验证(make_stub + process_file)... ", end="")
+    import sys
+    sys.path.insert(0, str(REPO / "scripts"))
+    try:
+        # 强制 reimport,避免被前面 assert 缓存影响
+        if "ingest" in sys.modules:
+            del sys.modules["ingest"]
+        import ingest
+    finally:
+        sys.path.pop(0)
+
+    # 验证 1:make_stub MARKITDOWN_FAILED_STUB rule_id 分支输出含"markitdown 转换失败"
+    smoke_src = REPO / "scripts" / "smoke_test.py"  # 用自身做 src_path 避开构造文件
+    stub_content = ingest.make_stub(smoke_src, "test-scene", "MARKITDOWN_FAILED_STUB",
+                                     source_abs_path=str(smoke_src),
+                                     prefixed_name="smoke.docx")
+    assert "markitdown 转换失败" in stub_content, \
+        f"MARKITDOWN_FAILED_STUB 分支应含'markitdown 转换失败'\nstub:\n{stub_content[:500]}"
+    assert "已复制源文件" in stub_content, \
+        f"MARKITDOWN_FAILED_STUB 分支应含'已复制源文件'\nstub:\n{stub_content[:500]}"
+    assert "未入库正文" in stub_content, \
+        f"MARKITDOWN_FAILED_STUB 分支应含 stub 标识\nstub:\n{stub_content[:500]}"
+
+    # 验证 2:REQUIRED_FIELDS_SCHEMA 仍 6 字段(防回退)
+    assert len(ingest.REQUIRED_FIELDS_SCHEMA) == 6, \
+        f"REQUIRED_FIELDS_SCHEMA 应 6 字段,实际 {len(ingest.REQUIRED_FIELDS_SCHEMA)}"
+
+    print("✓ (函数级,make_stub MARKITDOWN_FAILED_STUB 分支输出符合预期)")
+
+
+# ---------- Assert 12: 未知扩展名降级为 STUB_ONLY_UNSUPPORTED_EXT (v0.2.3 5th-4) ----------
+def assert_12_unsupported_ext_stub() -> None:
+    print("[12/12] 未知扩展名降级 stub(不再 ERROR_UNSUPPORTED_EXT)... ", end="")
+    unknown_dir = tempfile.mkdtemp(prefix="smoke_unsup_")
+    unknown_src = Path(unknown_dir) / "smoke.xyz"
+    unknown_src.write_bytes(b"smoke_test unknown extension fixture")
+    plan = {
+        "src_root": "smoke_test",
+        "items": [{
+            "src_abs": str(unknown_src),
+            "target_bucket": "02-areas",
+            "target_subdir": "产品方案库",
+            "target_filename": "smoke.xyz",
+            "frontmatter": {},
+            "ai_reason": "smoke_test unsupported ext",
+        }],
+    }
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False, encoding="utf-8") as f:
+        json.dump(plan, f, ensure_ascii=False)
+        plan_file = f.name
+    landed_stub = REPO / "corpus" / "02-areas" / "产品方案库" / "smoke.xyz.stub.md"
+    landed_src = REPO / "corpus" / "02-areas" / "产品方案库" / "smoke.xyz"
+    try:
+        proc = _run([PY, str(REPO / "scripts" / "ingest.py"), "execute-plan", plan_file])
+        assert "STUB_ONLY_UNSUPPORTED_EXT" in proc.stdout, \
+            f"未知扩展名应降级 STUB_ONLY_UNSUPPORTED_EXT 但未触发\n" \
+            f"stdout:\n{proc.stdout[:800]}\nstderr:\n{proc.stderr[:400]}"
+        assert "ERROR_UNSUPPORTED_EXT" not in proc.stdout, \
+            f"v0.2.3 后不应再走 ERROR_UNSUPPORTED_EXT,应降级 stub\n" \
+            f"stdout:\n{proc.stdout[:800]}"
+        assert landed_stub.exists(), f"stub 应落地: {landed_stub}"
+        assert landed_src.exists(), f"源文件应 cp: {landed_src}"
+    finally:
+        Path(plan_file).unlink(missing_ok=True)
+        unknown_src.unlink(missing_ok=True)
+        Path(unknown_dir).rmdir() if Path(unknown_dir).exists() else None
+        landed_stub.unlink(missing_ok=True)
+        landed_src.unlink(missing_ok=True)
+    print("✓")
+
+
 def main() -> int:
-    print(f"# smoke_test.py — v0.2.2 minimal smoke test 10/10 (Python: {PY})")
+    print(f"# smoke_test.py — v0.2.3 minimal smoke test 12/12 (Python: {PY})")
     print()
     failures: list[tuple[str, str]] = []
     for name, fn in [
@@ -345,6 +425,8 @@ def main() -> int:
         ("Assert 8 (missing ai_reason — Layer 1)", assert_8_missing_ai_reason_rejected),
         ("Assert 9 (frontmatter wrong type — Layer 2)", assert_9_frontmatter_wrong_type_rejected),
         ("Assert 10 (empty string field — Layer 3)", assert_10_empty_string_field_rejected),
+        ("Assert 11 (markitdown failed → stub — v0.2.3 5th-3)", assert_11_markitdown_failed_stub),
+        ("Assert 12 (unsupported ext → stub — v0.2.3 5th-4)", assert_12_unsupported_ext_stub),
     ]:
         try:
             fn()
@@ -353,7 +435,7 @@ def main() -> int:
             failures.append((name, str(e)))
     print()
     if not failures:
-        print("# ✅ smoke_test 10/10 PASS")
+        print("# ✅ smoke_test 12/12 PASS")
         return 0
     print(f"# ❌ smoke_test {len(failures)} FAIL:")
     for name, err in failures:

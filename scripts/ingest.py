@@ -33,14 +33,23 @@ INGEST_LOG = REPO / "logs" / "ingest_log.jsonl"
 BINARY_EXTS = {".docx", ".doc", ".xlsx", ".pptx", ".pdf",
                # v0.2 阶段 4:vsdx + odf 三件加入 markitdown 主流程
                ".vsdx", ".odt", ".ods", ".odp"}
-TEXT_EXTS = {".html", ".txt", ".md", ".json"}
+TEXT_EXTS = {
+    ".html", ".txt", ".md", ".json",
+    # v0.2.3 5th-1(Codex 测试仓库真实素材现场反馈):常见脚本 / 表格 / GIS 文本文件,
+    # 按原文 shutil.copy2 入库即可被 ripgrep 检索;不需要 markitdown 转换。
+    # .py:用户脚本 / .csv:表格 / .geojson:GIS 矢量 / .xml:配置/数据交换
+    # .cpg / .prj / .meta / .tfw:GIS 元数据小文件(投影 / 字符集 / 地理参考)
+    ".py", ".csv", ".geojson", ".xml", ".cpg", ".prj", ".meta", ".tfw",
+}
 
 # v0.2 阶段 4:vsdx 走 LibreOffice headless 转 PDF 后接现有 G15/G16 路径;
 # LibreOffice 不可用时永久 stub 标 failed_no_libreoffice(plan §7.3 步骤 4.3)
 VSDX_EXT = ".vsdx"
 
 # v0.3 多模态接入(沿用 v0.1):图像 + 视频走 vision 待转
-IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".gif", ".bmp", ".webp"}
+# v0.2.3 5th-2:加 .tif/.tiff(Codex 测试仓库现场反馈;TIFF 是 GIS 业务高频遥感影像格式,
+# Claude Code 内置 vision 能力直接 Read 即可识别,沿用路径 A 无需新增依赖)
+IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".gif", ".bmp", ".webp", ".tif", ".tiff"}
 VIDEO_EXTS = {".mp4", ".mov", ".avi", ".mkv", ".wmv", ".flv", ".webm", ".m4v", ".mpg", ".mpeg"}
 
 DENSITY_THRESHOLD = 0.05      # G18 触发的字符密度上限(< 5%)
@@ -238,6 +247,24 @@ def make_stub(src_path, scene, rule_id, density=None, char_count=None,
         llm_hint = ("**LLM 处理规则**:本 stub 仅含元数据,vision 正文未转写完成;"
                     "回答时只可说\"该问题相关素材是视频,vision 正文未入库;请打开源路径或等待 vision 转写\","
                     "**禁止**对视频内容做任何推断。")
+    elif rule_id == "MARKITDOWN_FAILED_STUB":
+        # v0.2.3 5th-3(Codex 测试仓库反馈):markitdown 装得不全(如缺 [docx])或文件本身坏,
+        # 转换失败时不再走 ERROR_MARKITDOWN_FAILED 阻断单个 item,改为降级"源文件 + stub"。
+        # 源文件已 cp 到 corpus 同目录;用户后续装齐依赖或换工具后,重跑 ingest 即可重入正文。
+        status = f"未入库正文(binary-{ext},markitdown 转换失败,已复制源文件并生成元数据 stub)"
+        note = "markitdown 转换失败的降级 stub。源文件已复制到 corpus 同目录;如需正文检索,需安装对应转换依赖或补充专用解析器后重跑。"
+        llm_hint = ("**LLM 处理规则**:本 stub 仅含元数据,正文未入库;"
+                    "回答时只可说明素材已保留为源文件并建议打开源文件查看,"
+                    "**禁止**对未解析正文内容做任何推断。")
+    elif rule_id == "UNSUPPORTED_COPY_STUB":
+        # v0.2.3 5th-4(Codex 测试仓库反馈):暂不支持扩展名的保底 stub。
+        # 跟 README §5.1 "shp 不在检索范围"的设计原则一致 — stub 不参与正文检索,只标记
+        # 文件存在;未来若加专用解析器(如 GDAL 读 .shp/.dbf),重跑 ingest 即可重入正文。
+        status = f"未入库正文(暂不支持自动转写的 {ext} 文件,已复制源文件并生成元数据 stub)"
+        note = "暂不支持扩展名的保底 stub。源文件已复制到 corpus 同目录;如需正文检索,需后续补充专用解析器。"
+        llm_hint = ("**LLM 处理规则**:本 stub 仅含元数据,正文未入库;"
+                    "回答时只可说明素材已保留为源文件并建议打开源文件查看,"
+                    "**禁止**对未解析正文内容做任何推断。")
     else:
         status = (f"已转 markdown 正文(同目录 .md 文件;"
                   f"G16 三件共存形态:源 binary + 本 stub + .md")
@@ -857,8 +884,29 @@ def process_file_with_explicit_target(item: dict, dry_run: bool, md_engine_holde
                                   "odf 降级:markitdown 未带 ODF converter,永久 stub")
                 log_action(rec)
                 return rec
-            rec = make_record(src_path, target_rel, "ERROR_MARKITDOWN_FAILED", "v0.2-plan-routed",
-                              src_size, None, f"markitdown 异常: {e}")
+            # v0.2.3 5th-3(Codex 测试仓库反馈):非 ODF 类 binary 的 markitdown 失败,
+            # 不再走 ERROR_MARKITDOWN_FAILED 单 item 阻断 + 不入库;改为降级 MARKITDOWN_FAILED_STUB
+            # (源文件 + stub + frontmatter 注入),让用户后续装齐依赖后重跑 ingest 可重入正文。
+            # ODF 已有专属降级路径(STUB_ONLY_ODF_NO_CONVERTER),保留不动。
+            target_dir.mkdir(parents=True, exist_ok=True)
+            stub_path = target_dir / f"{prefixed_name}.stub.md"
+            stub_path.write_text(
+                make_stub(src_path, scene, "MARKITDOWN_FAILED_STUB",
+                          source_abs_path=str(src_path), prefixed_name=prefixed_name),
+                encoding="utf-8")
+            stub_extra = (f"\n- converter_status: failed_markitdown\n"
+                          f"- 降级原因: markitdown 无法转换该 binary;源文件已复制,正文未入库\n"
+                          f"- 修复方案: 装齐 markitdown extra(如 markitdown[docx])或换专用解析器后重跑 ingest\n"
+                          f"- markitdown 异常: {e}\n")
+            with open(stub_path, "a", encoding="utf-8") as f:
+                f.write(stub_extra)
+            shutil.copy2(src_path, target_src)
+            if frontmatter:
+                inject_frontmatter(stub_path, frontmatter)
+            rec = make_record(src_path, norm_path(stub_path.relative_to(REPO)),
+                              "STUB_ONLY_MARKITDOWN_FAILED", "MARKITDOWN_FAILED_STUB",
+                              src_size, stub_path.stat().st_size,
+                              "markitdown 转换失败,降级为源文件 + stub")
             log_action(rec)
             return rec
 
@@ -1004,10 +1052,30 @@ def process_file_with_explicit_target(item: dict, dry_run: bool, md_engine_holde
         log_action(rec)
         return rec
 
-    rec = make_record(src_path, None, "ERROR_UNSUPPORTED_EXT", None, src_size, None,
-                      f"不支持的扩展名 {ext}")
-    if not dry_run:
-        log_action(rec)
+    # v0.2.3 5th-4(Codex 测试仓库反馈):暂不支持扩展名的保底降级。
+    # v0.2.2 行为是 ERROR_UNSUPPORTED_EXT → 单 item 入库失败 + 不入库 + 报错。
+    # 真实场景下 GIS 业务有大量 .shp/.dbf/.shx/.qix/.zip/.fcs/.ovr 等暂不支持解析的
+    # 中小文件(README §5.1 也说 shp 不在检索范围,但用户可能想保留为 stub 待后续解析)。
+    # 改为复制源文件 + 元数据 stub,避免材料在入库时丢失;LLM 检索时禁令仍要求
+    # "建议打开源文件查看",**不会推断未解析正文**(语义跟 README §5.1 "shp 不在检索范围"
+    # 一致 — stub 不参与正文检索,只标记文件存在)。
+    if dry_run:
+        return make_record(src_path, target_rel, "DRY_RUN_UNSUPPORTED_STUB", "UNSUPPORTED_COPY_STUB",
+                           src_size, None, f"[dry-run] 暂不支持扩展名 {ext},将复制源文件并生成 stub")
+    target_dir.mkdir(parents=True, exist_ok=True)
+    stub_path = target_dir / f"{prefixed_name}.stub.md"
+    stub_path.write_text(
+        make_stub(src_path, scene, "UNSUPPORTED_COPY_STUB",
+                  source_abs_path=str(src_path), prefixed_name=prefixed_name),
+        encoding="utf-8")
+    shutil.copy2(src_path, target_src)
+    if frontmatter:
+        inject_frontmatter(stub_path, frontmatter)
+    rec = make_record(src_path, norm_path(stub_path.relative_to(REPO)),
+                      "STUB_ONLY_UNSUPPORTED_EXT", "UNSUPPORTED_COPY_STUB",
+                      src_size, stub_path.stat().st_size,
+                      f"暂不支持扩展名 {ext},源文件已复制,stub 入库")
+    log_action(rec)
     return rec
 
 
