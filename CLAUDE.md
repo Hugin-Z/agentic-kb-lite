@@ -516,6 +516,20 @@ find corpus -type d -name "*.frames" | wc -l
 
 调整阈值改 `scripts/archive_check.py` 顶部 `ARCHIVE_THRESHOLD_DAYS` 常量(同 5.6.2 的"轻量原则",不引入 CLI 参数)。
 
+### 5.6.4 追溯过程材料 / 旧版本 / 素材(v0.3 新增)
+
+默认 `search.py` 不搜 `.shelved/` 与 `.archive/` 内容(三 bucket × tier 分层,working/versions/assets 都进 `.shelved/`)。用户问"之前的草稿 / 过程脚本 / 素材"等追溯类问法时,LLM 跑:
+
+```bash
+python scripts/search.py --scope all --terms "..." --deep
+```
+
+`--deep` 包含 `.shelved/**` 与 `.archive/**` 全扫。用于追溯旧版本(`.shelved/versions/`)/ 过程材料(`.shelved/working/`)/ 大素材(`.shelved/assets/`)。
+
+**阈值**:不强制何时用 `--deep`,LLM 按用户问法判断 — 含"之前 / 历史 / 草稿 / 版本 / 旧 / 过程 / 脚本"等关键词倾向加 `--deep`;常规检索问法默认不加。
+
+详见 [docs/v0.3-plan.md §6.3 步骤 3.1](docs/v0.3-plan.md)。
+
 ---
 
 ## 6. PARA 路由协议(v0.2 新增)

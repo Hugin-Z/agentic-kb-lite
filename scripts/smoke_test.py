@@ -1,9 +1,10 @@
-"""smoke_test.py — v0.3 最小自动化 smoke test(单文件 15 assert)
+"""smoke_test.py — v0.3 最小自动化 smoke test(单文件 16 assert)
 
-本脚本不引入 pytest 重型测试栈(轻量原则)。v0.3 起 15 个核心 assert,覆盖
+本脚本不引入 pytest 重型测试栈(轻量原则)。v0.3 起 16 个核心 assert,覆盖
 主链路 + schema 3 层校验(key 存在 / 类型 / 非空)+ BOM 兼容 + 真实路径边界
 + 失败降级路径(markitdown_failed / unsupported_ext stub 化)
-+ v0.3 tier 字段(Layer 6 三层校验 + .shelved 物理路由):
++ v0.3 tier 字段(Layer 6 三层校验 + .shelved 物理路由)
++ v0.3 阶段 3 search.py --deep flag(三 bucket × .shelved/未shelved):
 
   1. search.py --help(install 烟测调用参数有效)
   2. ingest.py scan-only(走通基础流程)
@@ -20,10 +21,11 @@
  13. execute-plan 拒绝非法 tier(v0.3 Layer 6.2 白名单)
  14. execute-plan tier=working 落 项目/.shelved/working/(v0.3 阶段 2 tier 路由)
  15. execute-plan 拒绝 family_key Windows 非法字符(v0.3 Layer 6.3)
+ 16. search.py --deep 三 bucket × .shelved/未shelved(v0.3 阶段 3 默认排除 + --deep 包含)
 
 用法:
   python scripts/smoke_test.py
-退出码:0 = 15 个 assert 全过;非 0 = 至少一个失败(stderr 写明哪个)
+退出码:0 = 16 个 assert 全过;非 0 = 至少一个失败(stderr 写明哪个)
 """
 from __future__ import annotations
 import json
@@ -45,7 +47,7 @@ def _run(args: list[str], **kw) -> subprocess.CompletedProcess:
 
 # ---------- Assert 1: search.py --help 返回 0(验证 install 调用参数有效)----------
 def assert_1_search_help() -> None:
-    print("[1/15] search.py --scope all --help (install 烟测调用参数)... ", end="")
+    print("[1/16] search.py --scope all --help (install 烟测调用参数)... ", end="")
     proc = _run([PY, str(REPO / "scripts" / "search.py"), "--scope", "all", "--help"])
     # --help 在 argparse 下 returncode=0 + stdout 含 usage
     assert proc.returncode == 0, f"search.py --help exit={proc.returncode}\nstderr:\n{proc.stderr}"
@@ -55,7 +57,7 @@ def assert_1_search_help() -> None:
 
 # ---------- Assert 2: scan-only 走通 + routing_request.json 生成 ----------
 def assert_2_scan_only() -> None:
-    print("[2/15] ingest.py scan-only corpus/.fixtures/E8_scope_routing/... ", end="")
+    print("[2/16] ingest.py scan-only corpus/.fixtures/E8_scope_routing/... ", end="")
     fixture = REPO / "corpus" / ".fixtures" / "E8_scope_routing"
     assert fixture.is_dir(), f"fixture 缺失: {fixture}"
     out = REPO / "logs" / "_smoke_test_routing_request.json"
@@ -74,7 +76,7 @@ def assert_2_scan_only() -> None:
 def assert_3_malformed_plan_rejected() -> None:
     """v0.2.2 Codex-5th 升级:6 字段全补齐,只让路径字段坏 — 这样错误是被路径校验
     拒,不是被 schema (REQUIRED_FIELDS) 拒(后者是 Layer 1,前者是 Layer 5)。"""
-    print("[3/15] execute-plan 真实拒 3 个路径边界 malformed plan(Layer 5 路径穿越)... ", end="")
+    print("[3/16] execute-plan 真实拒 3 个路径边界 malformed plan(Layer 5 路径穿越)... ", end="")
     base_fields = {
         "frontmatter": {},
         "ai_reason": "smoke_test 路径边界",
@@ -138,7 +140,7 @@ def assert_3_malformed_plan_rejected() -> None:
 
 # ---------- Assert 4: 关键依赖 import(docx + yaml + markitdown)----------
 def assert_4_imports() -> None:
-    print("[4/15] import docx + yaml + markitdown... ", end="")
+    print("[4/16] import docx + yaml + markitdown... ", end="")
     proc = _run([PY, "-c", "import docx; import yaml; import markitdown"])
     assert proc.returncode == 0, \
         f"关键依赖 import 失败 exit={proc.returncode}\nstderr:\n{proc.stderr}"
@@ -147,7 +149,7 @@ def assert_4_imports() -> None:
 
 # ---------- Assert 5: execute-plan 拒绝缺 target_subdir 的 plan (v0.2.2 C-1) ----------
 def assert_5_missing_subdir_rejected() -> None:
-    print("[5/15] execute-plan 拒绝缺 target_subdir 的 plan(schema Layer 1 key 存在)... ", end="")
+    print("[5/16] execute-plan 拒绝缺 target_subdir 的 plan(schema Layer 1 key 存在)... ", end="")
     bad_plan = {
         "src_root": "smoke_test",
         "items": [{
@@ -177,7 +179,7 @@ def assert_5_missing_subdir_rejected() -> None:
 
 # ---------- Assert 6: execute-plan 能读 UTF-8 BOM plan (v0.2.2 C-2) ----------
 def assert_6_utf8_bom_plan() -> None:
-    print("[6/15] execute-plan 读 UTF-8 BOM plan(BOM 兼容)... ", end="")
+    print("[6/16] execute-plan 读 UTF-8 BOM plan(BOM 兼容)... ", end="")
     fixture = REPO / "corpus" / ".fixtures" / "E8_scope_routing"
     sample_file = next((fixture / "01-projects").rglob("*.md"), None)
     assert sample_file is not None, "E8 fixture 内未找到 .md 文件作 src_abs"
@@ -212,7 +214,7 @@ def assert_6_utf8_bom_plan() -> None:
 
 # ---------- Assert 7: execute-plan 拒绝缺 frontmatter 的 plan (v0.2.2 Codex-4th-1) ----------
 def assert_7_missing_frontmatter_rejected() -> None:
-    print("[7/15] execute-plan 拒绝缺 frontmatter 的 plan(schema Layer 1 key 存在)... ", end="")
+    print("[7/16] execute-plan 拒绝缺 frontmatter 的 plan(schema Layer 1 key 存在)... ", end="")
     bad_plan = {
         "src_root": "smoke_test",
         "items": [{
@@ -241,7 +243,7 @@ def assert_7_missing_frontmatter_rejected() -> None:
 
 # ---------- Assert 8: execute-plan 拒绝缺 ai_reason 的 plan (v0.2.2 Codex-4th-1) ----------
 def assert_8_missing_ai_reason_rejected() -> None:
-    print("[8/15] execute-plan 拒绝缺 ai_reason 的 plan(schema Layer 1 key 存在)... ", end="")
+    print("[8/16] execute-plan 拒绝缺 ai_reason 的 plan(schema Layer 1 key 存在)... ", end="")
     bad_plan = {
         "src_root": "smoke_test",
         "items": [{
@@ -270,7 +272,7 @@ def assert_8_missing_ai_reason_rejected() -> None:
 
 # ---------- Assert 9: execute-plan 拒绝 frontmatter 非 dict (Codex-5th Layer 2 类型校验) ----------
 def assert_9_frontmatter_wrong_type_rejected() -> None:
-    print("[9/15] execute-plan 拒绝 frontmatter 非 dict 的 plan(Layer 2 类型校验)... ", end="")
+    print("[9/16] execute-plan 拒绝 frontmatter 非 dict 的 plan(Layer 2 类型校验)... ", end="")
     type_cases = [
         ("frontmatter=None", None),
         ("frontmatter=\"str\"", "string instead of dict"),
@@ -304,7 +306,7 @@ def assert_9_frontmatter_wrong_type_rejected() -> None:
 
 # ---------- Assert 10: execute-plan 拒绝空字符串字段 (Codex-5th Layer 3 非空校验) ----------
 def assert_10_empty_string_field_rejected() -> None:
-    print("[10/15] execute-plan 拒绝 target_subdir / ai_reason 空字符串(Layer 3 非空)... ", end="")
+    print("[10/16] execute-plan 拒绝 target_subdir / ai_reason 空字符串(Layer 3 非空)... ", end="")
     empty_cases = [
         ("target_subdir=\"\"", "target_subdir", ""),
         ("target_subdir=\"   \"", "target_subdir", "   "),  # strip 后空
@@ -343,7 +345,7 @@ def assert_11_markitdown_failed_stub() -> None:
     无法通过 subprocess + 坏 fixture 模拟真实失败。这里改为**直接 import + 调函数**
     验证 MARKITDOWN_FAILED_STUB 路径(make_stub rule_id + process_file except 分支)
     的行为正确性。end-to-end 由 manual 验证补充(progress.md 落表)。"""
-    print("[11/15] markitdown 失败降级路径函数级验证(make_stub + process_file)... ", end="")
+    print("[11/16] markitdown 失败降级路径函数级验证(make_stub + process_file)... ", end="")
     import sys
     sys.path.insert(0, str(REPO / "scripts"))
     try:
@@ -375,7 +377,7 @@ def assert_11_markitdown_failed_stub() -> None:
 
 # ---------- Assert 12: 未知扩展名降级为 STUB_ONLY_UNSUPPORTED_EXT (v0.2.3 5th-4) ----------
 def assert_12_unsupported_ext_stub() -> None:
-    print("[12/15] 未知扩展名降级 stub(不再 ERROR_UNSUPPORTED_EXT)... ", end="")
+    print("[12/16] 未知扩展名降级 stub(不再 ERROR_UNSUPPORTED_EXT)... ", end="")
     unknown_dir = tempfile.mkdtemp(prefix="smoke_unsup_")
     unknown_src = Path(unknown_dir) / "smoke.xyz"
     unknown_src.write_bytes(b"smoke_test unknown extension fixture")
@@ -416,9 +418,9 @@ def assert_12_unsupported_ext_stub() -> None:
 
 # ---------- Assert 13: execute-plan 拒绝非法 tier (v0.3 阶段 1 Layer 6.2 白名单) ----------
 def assert_13_invalid_tier_rejected() -> None:
-    """v0.3 阶段 2 step 2.4 [13/15]:tier 字段白名单拒非法值。
+    """v0.3 阶段 2 step 2.4 [13/16]:tier 字段白名单拒非法值。
     反向断言:拒因含 'whitelist' 不含 'missing required field'。"""
-    print("[13/15] execute-plan 拒绝非法 tier 'evil'(Layer 6.2 白名单)... ", end="")
+    print("[13/16] execute-plan 拒绝非法 tier 'evil'(Layer 6.2 白名单)... ", end="")
     bad_plan = {
         "plan_schema_version": "v0.3",
         "src_root": "smoke_test",
@@ -452,9 +454,9 @@ def assert_13_invalid_tier_rejected() -> None:
 
 # ---------- Assert 14: execute-plan 落 项目/.shelved/working/ (v0.3 阶段 2 tier 路由) ----------
 def assert_14_shelved_working_landing() -> None:
-    """v0.3 阶段 2 step 2.4 [14/15]:tier=working 端到端落 .shelved/working/。
+    """v0.3 阶段 2 step 2.4 [14/16]:tier=working 端到端落 .shelved/working/。
     用虚构项目名 _v03_smoke_working_,测完清理(W-v0.3-阶段1-W1 防御)。"""
-    print("[14/15] execute-plan 落 项目/.shelved/working/(tier=working 端到端)... ", end="")
+    print("[14/16] execute-plan 落 项目/.shelved/working/(tier=working 端到端)... ", end="")
     working_dir = tempfile.mkdtemp(prefix="smoke_v03_working_")
     working_src = Path(working_dir) / "build_demo.md"
     working_src.write_text("# v03 working tier smoke\n\nbuild script demo", encoding="utf-8")
@@ -501,9 +503,9 @@ def assert_14_shelved_working_landing() -> None:
 
 # ---------- Assert 15: execute-plan 拒绝 family_key Windows 非法字符 (v0.3 阶段 1 Layer 6.3) ----------
 def assert_15_family_key_invalid_char_rejected() -> None:
-    """v0.3 阶段 2 step 2.4 [15/15]:tier=versions + family_key 含 Win 非法字符拒。
+    """v0.3 阶段 2 step 2.4 [15/16]:tier=versions + family_key 含 Win 非法字符拒。
     反向断言:拒因含 'Windows-invalid chars' 不含 'missing required field' / 'not in whitelist'。"""
-    print("[15/15] execute-plan 拒绝 family_key Windows 非法字符(Layer 6.3)... ", end="")
+    print("[15/16] execute-plan 拒绝 family_key Windows 非法字符(Layer 6.3)... ", end="")
     bad_plan = {
         "plan_schema_version": "v0.3",
         "src_root": "smoke_test",
@@ -538,8 +540,81 @@ def assert_15_family_key_invalid_char_rejected() -> None:
     print("✓")
 
 
+# ---------- Assert 16: search.py --deep 三 bucket × shelved/未shelved (v0.3 阶段 3) ----------
+def assert_16_deep_flag_three_buckets() -> None:
+    """v0.3 阶段 3 step 3.3 + 3.4 [16/16]:三 bucket 各放 canonical + .shelved/working
+    fixture,验证默认 search 不命中 shelved,--deep 命中,且默认输出含提示。
+    用虚构项目名 _v03_phase3_deep_*_,测完 shutil.rmtree 清理(W-v0.3-阶段1-W1 防御)。"""
+    print("[16/16] search.py --deep 三 bucket × .shelved/未shelved 端到端... ", end="")
+    import shutil
+
+    # 三 bucket × (canonical + shelved/working) = 6 fixture
+    UNIQUE_CANON = "v03_p3_canon_unique_xyz_zzz"
+    UNIQUE_SHELVED = "v03_p3_shelved_unique_xyz_zzz"
+    fixtures = []
+    cleanups = []
+
+    proj = REPO / "corpus" / "01-projects" / "_v03_phase3_deep_test_"
+    areas = REPO / "corpus" / "02-areas" / "_v03_phase3_areas_test_"
+    res = REPO / "corpus" / "03-resources" / "_v03_phase3_res_test_"
+
+    for root, canon_sub, shelved_sub in [
+        (proj, "01-方案", ".shelved/working/99-其他"),
+        (areas, "", ".shelved/working"),
+        (res, "", ".shelved/working"),
+    ]:
+        # canonical(默认命中)
+        canon_path = root / canon_sub / "canonical.md" if canon_sub else root / "canonical.md"
+        canon_path.parent.mkdir(parents=True, exist_ok=True)
+        canon_path.write_text(f"# canonical\n\nbody:{UNIQUE_CANON}", encoding="utf-8")
+        # shelved/working(默认不命中)
+        shelved_path = root / shelved_sub / "working_demo.md"
+        shelved_path.parent.mkdir(parents=True, exist_ok=True)
+        shelved_path.write_text(f"# shelved working\n\nbody:{UNIQUE_SHELVED}", encoding="utf-8")
+        fixtures.append((canon_path, shelved_path))
+        cleanups.append(root)
+
+    try:
+        search = [PY, str(REPO / "scripts" / "search.py")]
+
+        # 跑 1:默认搜 canonical 关键词 → 应命中(默认行为)+ 提示
+        proc1 = _run(search + ["--scope", "all", "--terms", UNIQUE_CANON])
+        assert proc1.returncode == 0, f"search canonical exit={proc1.returncode}\nstderr:\n{proc1.stderr}"
+        assert UNIQUE_CANON in proc1.stdout, \
+            f"默认搜 canonical 应命中关键词\nstdout:\n{proc1.stdout[:800]}"
+        assert "默认检索已排除 .shelved" in proc1.stdout, \
+            f"默认输出应含 .shelved 排除提示\nstdout:\n{proc1.stdout[:600]}"
+
+        # 跑 2:默认搜 shelved 关键词 → 应 0 命中(默认排除 .shelved/**)
+        # 判定标准:search.py 输出"命中文件: 0";search.py 会 echo 出检索词到"未命中检索词"
+        # 段,所以不能用 UNIQUE_SHELVED in stdout 判定。
+        proc2 = _run(search + ["--scope", "all", "--terms", UNIQUE_SHELVED])
+        assert proc2.returncode == 0, f"search shelved (default) exit={proc2.returncode}\nstderr:\n{proc2.stderr}"
+        assert "命中文件**: 0" in proc2.stdout or "**命中文件**: 0" in proc2.stdout, \
+            f"默认搜 shelved 应 0 命中(应被 .shelved/** glob 排除)\nstdout:\n{proc2.stdout[:1500]}"
+
+        # 跑 3:--deep 搜 shelved 关键词 → 应命中(三 bucket 都命中)
+        proc3 = _run(search + ["--scope", "all", "--terms", UNIQUE_SHELVED, "--deep"])
+        assert proc3.returncode == 0, f"search shelved --deep exit={proc3.returncode}\nstderr:\n{proc3.stderr}"
+        assert UNIQUE_SHELVED in proc3.stdout, \
+            f"--deep 搜 shelved 应命中关键词\nstdout:\n{proc3.stdout[:800]}"
+        # --deep 时不应输出排除提示
+        assert "默认检索已排除 .shelved" not in proc3.stdout, \
+            f"--deep 时不应输出 .shelved 排除提示\nstdout:\n{proc3.stdout[:600]}"
+        # 验证三 bucket 都命中(基本检查:stdout 含 01-projects/02-areas/03-resources 三个路径前缀)
+        hit_buckets = sum(1 for b in ["01-projects", "02-areas", "03-resources"]
+                          if b in proc3.stdout)
+        assert hit_buckets == 3, \
+            f"--deep 应在三 bucket 各命中一次,实际命中 {hit_buckets} bucket\nstdout:\n{proc3.stdout[:1500]}"
+    finally:
+        for root in cleanups:
+            if root.exists():
+                shutil.rmtree(root)
+    print("✓ (3 bucket × default 排除 + --deep 命中)")
+
+
 def main() -> int:
-    print(f"# smoke_test.py — v0.3 minimal smoke test 15/15 (Python: {PY})")
+    print(f"# smoke_test.py — v0.3 minimal smoke test 16/16 (Python: {PY})")
     print()
     failures: list[tuple[str, str]] = []
     for name, fn in [
@@ -558,6 +633,7 @@ def main() -> int:
         ("Assert 13 (invalid tier → Layer 6.2 whitelist — v0.3)", assert_13_invalid_tier_rejected),
         ("Assert 14 (tier=working → .shelved/working/ — v0.3 阶段 2)", assert_14_shelved_working_landing),
         ("Assert 15 (family_key Win-invalid chars → Layer 6.3 — v0.3)", assert_15_family_key_invalid_char_rejected),
+        ("Assert 16 (search.py --deep 三 bucket × .shelved — v0.3 阶段 3)", assert_16_deep_flag_three_buckets),
     ]:
         try:
             fn()
@@ -566,7 +642,7 @@ def main() -> int:
             failures.append((name, str(e)))
     print()
     if not failures:
-        print("# ✅ smoke_test 15/15 PASS")
+        print("# ✅ smoke_test 16/16 PASS")
         return 0
     print(f"# ❌ smoke_test {len(failures)} FAIL:")
     for name, err in failures:

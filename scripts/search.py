@@ -77,6 +77,8 @@ def parse_args():
     p.add_argument("--no-stub", action="store_true")
     p.add_argument("--regex", action="store_true",
                    help="启用 rg 正则模式(默认 --fixed-strings 字面匹配,对括号/星号/方括号等检索词安全)")
+    p.add_argument("--deep", action="store_true",
+                   help="包含 .shelved/** 与 .archive/**(默认排除);用于追溯过程材料/旧版本/素材(v0.3)")
     return p.parse_args()
 
 
@@ -118,12 +120,19 @@ def check_rg_proc(proc, terms, args):
     sys.exit(2)
 
 
-def run_rg(rg, terms, dirs, context, regex=False, no_stub=False):
+def run_rg(rg, terms, dirs, context, regex=False, no_stub=False, deep=False):
     """v0.2.1 P1-8: --no-stub 在 rg 参数层加 --glob '!*.stub.md',
-    避免后处理过滤后 per_term_hits 与 files 计数不一致(误导 LLM 回退判断)。"""
+    避免后处理过滤后 per_term_hits 与 files 计数不一致(误导 LLM 回退判断)。
+
+    v0.3 阶段 3:默认 glob 加 !.shelved/**(沿用 !.archive/** 同款);--deep 时
+    两个排除都不加,允许命中 .shelved/.archive 内容(追溯过程材料/旧版本/素材)。"""
     args = [rg, "--json", "-i", "-C", str(context),
-            "--glob", "!.references.md",
-            "--glob", "!.archive/**"]
+            "--glob", "!.references.md"]
+    if not deep:
+        args.extend([
+            "--glob", "!.shelved/**",   # v0.3 新增
+            "--glob", "!.archive/**",   # v0.2.x 沿用
+        ])
     if no_stub:
         args.extend(["--glob", "!*.stub.md"])
     if not regex:
@@ -144,13 +153,18 @@ def run_rg(rg, terms, dirs, context, regex=False, no_stub=False):
     return events
 
 
-def per_term_hits(rg, terms, dirs, regex=False, no_stub=False):
-    """v0.2.1 P1-8: 同 run_rg 透传 --no-stub,确保 per_term_hits 与 files 共享 glob。"""
+def per_term_hits(rg, terms, dirs, regex=False, no_stub=False, deep=False):
+    """v0.2.1 P1-8: 同 run_rg 透传 --no-stub,确保 per_term_hits 与 files 共享 glob。
+    v0.3 阶段 3:同步 --deep 排除策略(默认排除 .shelved/.archive,--deep 包含)。"""
     hits = {}
     for t in terms:
         args = [rg, "-l", "-i",
-                "--glob", "!.references.md",
-                "--glob", "!.archive/**"]
+                "--glob", "!.references.md"]
+        if not deep:
+            args.extend([
+                "--glob", "!.shelved/**",   # v0.3 新增
+                "--glob", "!.archive/**",   # v0.2.x 沿用
+            ])
         if no_stub:
             args.extend(["--glob", "!*.stub.md"])
         if not regex:
@@ -250,7 +264,11 @@ def main():
         if not d.is_dir():
             sys.stderr.write(f"ERROR: corpus 子目录不存在 {d}\n")
             sys.exit(2)
-    events = run_rg(rg, terms, dirs, args.context, regex=args.regex, no_stub=args.no_stub)
+    # v0.3 阶段 3 步骤 3.2:默认排除 .shelved/.archive,显式提示用户如何追溯
+    if not args.deep:
+        print("# ℹ 默认检索已排除 .shelved/** 与 .archive/**;如需追溯过程材料/旧版本/素材,加 --deep 重跑")
+    events = run_rg(rg, terms, dirs, args.context, regex=args.regex,
+                    no_stub=args.no_stub, deep=args.deep)
     files = group(events)
     for p in list(files):
         if len(files[p]) > 200:
@@ -301,7 +319,8 @@ def main():
     else:
         print("(无)\n")
     print("## 三、未命中检索词\n")
-    term_hits = per_term_hits(rg, terms, dirs, regex=args.regex, no_stub=args.no_stub)
+    term_hits = per_term_hits(rg, terms, dirs, regex=args.regex,
+                              no_stub=args.no_stub, deep=args.deep)
     zero_terms = [t for t, n in term_hits.items() if n == 0]
     if not zero_terms:
         print("— 本次所有检索词均有命中\n")
