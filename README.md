@@ -234,6 +234,30 @@ AI 会按 [CLAUDE.md](CLAUDE.md) 工作流跑 ingest(G14/G15/G16/G18 分流)+ ag
 - "2026Q1 有没有跟数据治理相关的方案?"
 ```
 
+### 3.7 tier 5 类分层(v0.3 新增)
+
+入库时 AI 在 routing_plan 阶段为每个文件判定 `tier`,5 类:
+
+| tier | 语义 | 默认是否参与检索 | 物理落位 |
+|---|---|---|---|
+| `canonical` | 主知识 / 最终交付物(总体方案 / 实施方案 / 需求说明书等) | ✅ 参与 | 现有 5 子目录(`01-方案/` 等) |
+| `normal` | 项目内一般材料(**默认值**) | ✅ 参与 | 现有 5 子目录 |
+| `working` | 过程脚本 / 临时材料(`build_*` / `dump_*` / `temp_*` 等) | ❌ 不参与 | `.shelved/working/<subdir>/` |
+| `versions` | 旧版本追溯(同 baseline 多份,如 `v1.docx / v2.docx`) | ❌ 不参与 | `.shelved/versions/<family_key>/` |
+| `assets` | 大图片 / 视频 / GIS 原始素材(`.shp/.mp4` 大量堆放) | ❌ 不参与 | `.shelved/assets/<subdir>/` |
+
+`tier=working / versions / assets` 落到所在 bucket 的 `.shelved/<tier>/` 子目录,默认 `search.py` 排除。判定协议详见 [CLAUDE.md §6 Step E](CLAUDE.md)。
+
+### 3.8 search.py `--deep`:追溯过程材料 / 旧版本 / 素材(v0.3 新增)
+
+默认 `search.py` 不搜 `.shelved/` 与 `.archive/` 内容(噪声分离)。追溯时加 `--deep`:
+
+```bash
+python scripts/search.py --scope all --terms "之前的 build 脚本 草稿" --deep
+```
+
+`--deep` 同时去掉 glob 排除 + 给 rg 加 `--hidden`(真扫隐藏目录;v0.3.0 阶段 4A W-v0.3-阶段3-W1 修)。用户问"之前 / 历史 / 草稿 / 版本 / 旧 / 过程 / 脚本"等关键词时,LLM 倾向加 `--deep`。详见 [CLAUDE.md §5.6.4](CLAUDE.md)。
+
 ## 4. 项目结构
 
 ```text
@@ -325,7 +349,9 @@ python scripts/smoke_test.py
 | [CLAUDE.md](CLAUDE.md) | AI 编程助手运行时契约 — 双轴检索(scope × behavior)/ PARA 路由协议 / 引用规范 / 红线;**每次会话必读** |
 | [docs/试用指南.md](docs/试用指南.md) | 装机指南 / 推荐试用问题 / 边界说明 |
 | [docs/v0.1-to-v0.2-migration.md](docs/v0.1-to-v0.2-migration.md) | **v0.1 → v0.2 迁移指南**(v0.2.0 release 起) |
+| [docs/v0.2-to-v0.3-migration.md](docs/v0.2-to-v0.3-migration.md) | **v0.2 → v0.3 迁移指南**(v0.3.0 release 起;tier 5 类 + `.shelved/` + `--deep`) |
 | [docs/v0.2-plan.md](docs/v0.2-plan.md) | v0.2 升级实施计划(PER 协议;阶段 1-6 全部审定 v1.2) |
+| [docs/v0.3-plan.md](docs/v0.3-plan.md) | v0.3 升级实施计划(PER 协议;阶段 0-4 全部 PASS,Codex 终审待跑) |
 | [scripts/README.md](scripts/README.md) | scripts/ingest.py(scan-only + execute-plan) + search.py + archive_check.py 说明 |
 | [tests/查询记录.md](tests/查询记录.md) | 评估证据(E1-E10 + V1-V7)+ 治理记录(R/G/J/F/P/W) |
 | [tests/v0.2-plan-progress.md](tests/v0.2-plan-progress.md) | v0.2 升级各阶段执行进度 + W 系裁决 |
@@ -345,7 +371,18 @@ python scripts/smoke_test.py
 
 **v0.2.0 已知限制**:见 [release notes](https://github.com/Hugin-Z/agentic-kb-lite/releases/tag/v0.2.0)。
 
-## 8. License + 反馈
+## 8. v0.3 升级说明(v0.3.0 release 起)
+
+v0.3 引入 **tier 5 类分层 + `.shelved/` 默认 search 排除 + `search.py --deep`** 三件套(设计目标:**材料不丢 + 默认检索干净**)。
+
+**v0.2 已入库材料 + v0.2 routing_plan 完全向后兼容**:
+
+- v0.2 已入库材料:默认按 `tier=normal` 参与检索,**行为与 v0.2.3 完全一致**
+- v0.2 routing_plan 重跑(无 `plan_schema_version`):自动注入 `kb_tier: normal` + `kb_default_search: true`,**不报错不警告**
+
+主要变更见 [docs/v0.2-to-v0.3-migration.md](docs/v0.2-to-v0.3-migration.md);可选 dry-run helper:`python scripts/migrate_v023_to_v030.py` 扫描已入库材料 → 输出候选清单(**不自动 mv**)。
+
+## 9. License + 反馈
 
 **LICENSE**: MIT — 详见 [LICENSE](LICENSE)
 

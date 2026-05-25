@@ -693,7 +693,18 @@ python scripts/search.py --scope all --terms "..." --deep
 > CLAUDE.md 内部版本号与项目 release tag 两套并行 — 本节追踪契约文档本身的演进。项目 release tag 在 `docs/v0.2-plan.md` §12 与 git tags。
 
 - v0.1:初始版
-- **v0.7(本版,对应项目 release v0.2.0)**:PARA 四层 corpus + scope × behavior 双轴检索 + AI 语义路由 ingest + 嵌入媒体格式扩展
+- **v0.8(本版,对应项目 release v0.3.0,合并 v0.2.3 hotfix 一并发)**:tier 5 类分层 + `.shelved/` 三 bucket × 物理子目录 + `search.py --deep` + frontmatter 3 新字段 + Layer 6 校验 + migration helper dry-run
+  - 新增 **第 6.2 节 Step E "tier 判定"**(v0.3 新增,适用 projects + areas + resources 三 bucket;archives 跳过):5 类判定要点(canonical / normal / working / versions / assets)+ 4 约束(AI 在 plan 阶段判;模糊优先 normal;versions 必填 family_key;family_key 不可含 Windows 非法字符)+ v0.3 新 plan / v0.2 旧 plan 兼容矩阵
+  - 新增 **第 5.6.4 节"追溯过程材料 / 旧版本 / 素材"**:`search.py --deep` 用法 + `--hidden` 真扫隐藏目录 + LLM 按"之前 / 历史 / 草稿 / 版本 / 旧 / 过程 / 脚本"等关键词倾向加 `--deep` 的阈值规则
+  - v0.3 物理实现(代码层):`scripts/ingest.py` 新增 `ALLOWED_TIERS` 常量 + `_validate_tier_field`(Layer 6.1/6.2/6.3 三层校验)+ `_validate_plan_item_paths` 加 `plan_schema_version` 参数 + `_build_target_dir` 三 bucket × 4 路由分支(canonical-normal / working-assets / versions / archives 忽略 tier)+ `process_file_with_explicit_target` frontmatter 注入 3 新字段(`kb_tier / kb_default_search / family_key`);`scripts/search.py` 加 `--deep` flag + `--hidden`(与 glob 排除互斥);`scripts/smoke_test.py` 12 → 16(加 [13/16] 非法 tier 拒 / [14/16] tier=working 端到端 / [15/16] family_key Windows 非法字符拒 / [16/16] `--deep` 三 bucket × .shelved 强证据断言)
+  - 新增 helper:`scripts/migrate_v023_to_v030.py`(dry-run only,扫已入库材料 → 推断 tier 候选 → 输出 `logs/v030_migration_candidates_<ts>.md`,**不自动 mv**;自动 mv 留 v0.4+ — 涉及 log/stub/.assets/frontmatter 五件套同步)
+  - 新增 fixture:`corpus/.fixtures/E11_tier_routing/`(4 类 tier × 4 文件 + 独特 marker);`tests/查询记录.md` 加 E11 段 8 查询验证 8/8 PASS
+  - 新增 migration guide:`docs/v0.2-to-v0.3-migration.md`(6 段:重大变更对照表 / 迁移步骤 / 不兼容点 / 已知问题 / 回滚 / 帮助)
+  - 向后兼容:v0.2 已入库材料默认按 `tier=normal` 参与检索行为不变;v0.2 routing_plan(无 `plan_schema_version`)缺 tier 字段 → 自动注入 `kb_tier=normal + kb_default_search=true`,不报错不警告
+  - v0.2.3 hotfix 合并发(Codex trialV3 反馈):TEXT_EXTS 扩展(`.py/.csv/.geojson/.xml/.cpg/.prj/.meta/.tfw`)+ IMAGE_EXTS 加 `.tif/.tiff` + MARKITDOWN_FAILED_STUB 降级 + UNSUPPORTED_COPY_STUB 降级(失败 → 源文件 cp + stub 二件共存,装齐依赖后重跑 ingest 自动重入正文)
+  - 顺手修(v0.8 顺手):W-v0.3-阶段3-W1 假阳 PASS 回溯修 — 阶段 3 加 `--deep` 时只移除 glob 排除没加 `--hidden`,rg 默认跳隐藏目录致使 `.shelved/` 实际仍扫不到;smoke [16/16] 弱断言假阳 PASS。阶段 4A 修:`search.py` 加 `--hidden` + smoke 改用"命中文件数 + 路径含 `.shelved`"强证据双判定。**经验落定**:smoke 断言优先用结构化字段判定;跨阶段新增 flag 端到端验证应跑真实有命中的 fixture
+  - **不在 v0.8 范围**(留 release notes / v0.4+):自动 mv migration helper(留 v0.4+;mv 涉及五件套同步,复杂度等价于重做一次 ingest)/ tier 判定边界 case 误判规则化(累计 ≥ 2 真实误判触发补 Step E 规则,沿用 v0.2.2 W-5-W1 跟踪机制)
+- **v0.7(对应项目 release v0.2.0)**:PARA 四层 corpus + scope × behavior 双轴检索 + AI 语义路由 ingest + 嵌入媒体格式扩展
   - 第 1 节本仓库定位重写:从 v0.1 四类场景表 → PARA 四层 corpus 表 + 双轴检索说明
   - 新增 **第 2.0 节"步骤 0:检索行为识别"**:4 类行为定义(单点定位 / 盘点 / 决策溯源 / 模糊探索)+ 触发词优先级冲突规则 + 行为稳定性
   - 第 2 节状态段 schema 加 v0.2 新增 3 字段(`检索行为` / `行为判定依据` / `默认 scope`);硬上限补正"≤ 12 次(3 × 4 级)"(对齐其他位置)

@@ -236,6 +236,32 @@ Queries that suit this repo (substitute with your own domain / projects):
 - "Any data-governance proposals from Q1 2026?"
 ```
 
+### 3.7 tier 5-class layering (new in v0.3)
+
+At ingest time, the AI assigns each file a `tier` during the routing_plan stage. 5 classes:
+
+| tier | Meaning | Indexed by default? | Physical location |
+|---|---|---|---|
+| `canonical` | Primary knowledge / final deliverables (master plan, implementation plan, requirements spec, etc.) | ✅ Yes | Existing 5 subdirs (`01-方案/` etc.) |
+| `normal` | General project materials (**default value**) | ✅ Yes | Existing 5 subdirs |
+| `working` | Process scripts / temporary materials (`build_*` / `dump_*` / `temp_*` etc.) | ❌ No | `.shelved/working/<subdir>/` |
+| `versions` | Older version tracebacks (same baseline with multiple copies, e.g. `v1.docx / v2.docx`) | ❌ No | `.shelved/versions/<family_key>/` |
+| `assets` | Large images / videos / GIS raw assets (large `.shp/.mp4` piles) | ❌ No | `.shelved/assets/<subdir>/` |
+
+`tier=working / versions / assets` are placed into the bucket's `.shelved/<tier>/` subdirectory and **excluded from default search**. Tier-judgment protocol: see [CLAUDE.md §6 Step E](CLAUDE.md).
+
+> Note: tier names (`canonical / normal / working / versions / assets`) are English literals — they are the values written into the `tier` field of `routing_plan.json` and into the `kb_tier` frontmatter field. Do not translate. `.shelved/` is also a literal directory name.
+
+### 3.8 search.py `--deep`: trace process materials / older versions / raw assets (new in v0.3)
+
+By default `search.py` does NOT search `.shelved/` or `.archive/` content (noise separation). For traceback, add `--deep`:
+
+```bash
+python scripts/search.py --scope all --terms "previous build script draft" --deep
+```
+
+`--deep` simultaneously removes the glob exclusions AND passes `--hidden` to rg (so rg actually descends into hidden directories — fixed in v0.3.0 stage 4A under W-v0.3-阶段3-W1). When a user query contains hint words like "previous / history / draft / version / old / process / script," the LLM tends to add `--deep`. See [CLAUDE.md §5.6.4](CLAUDE.md).
+
 ## 4. Project structure
 
 ```text
@@ -319,7 +345,9 @@ agentic-kb-lite/
 | [CLAUDE.md](CLAUDE.md) | AI coding assistant runtime contract — dual-axis retrieval (scope × behavior) / PARA routing protocol / citation / red lines; **mandatory pre-read** per session |
 | [docs/试用指南.md](docs/试用指南.md) | Install guide / recommended trial queries / boundaries |
 | [docs/v0.1-to-v0.2-migration.md](docs/v0.1-to-v0.2-migration.md) | **v0.1 → v0.2 Migration Guide** (since v0.2.0 release) |
+| [docs/v0.2-to-v0.3-migration.md](docs/v0.2-to-v0.3-migration.md) | **v0.2 → v0.3 Migration Guide** (since v0.3.0 release; tier 5-class + `.shelved/` + `--deep`) |
 | [docs/v0.2-plan.md](docs/v0.2-plan.md) | v0.2 upgrade implementation plan (PER protocol; stages 1–6 all sealed at v1.2) |
+| [docs/v0.3-plan.md](docs/v0.3-plan.md) | v0.3 upgrade implementation plan (PER protocol; stages 0–4 all PASS, awaiting Codex final review) |
 | [scripts/README.md](scripts/README.md) | `scripts/ingest.py` (`scan-only` + `execute-plan`) + `search.py` + `archive_check.py` |
 | [tests/查询记录.md](tests/查询记录.md) | Evaluation evidence (E1–E10 + V1–V7) + governance records (R/G/J/F/P/W) |
 | [tests/v0.2-plan-progress.md](tests/v0.2-plan-progress.md) | v0.2 upgrade stage-by-stage execution progress + W-system adjudications |
@@ -339,7 +367,18 @@ Key changes:
 
 **v0.2.0 known limitations**: see [release notes](https://github.com/Hugin-Z/agentic-kb-lite/releases/tag/v0.2.0).
 
-## 8. License + feedback
+## 8. v0.3 upgrade notes (since v0.3.0)
+
+v0.3 introduces **tier 5-class layering + default `.shelved/` exclusion from search + `search.py --deep`** (design goal: **don't lose materials + keep default search clean**).
+
+**v0.2 already-ingested materials + v0.2 routing_plan remain fully backward-compatible**:
+
+- v0.2 already-ingested materials: indexed by default as `tier=normal`, **behavior identical to v0.2.3**
+- Re-running a v0.2 routing_plan (without `plan_schema_version`): auto-injects `kb_tier: normal` + `kb_default_search: true`; **no errors, no warnings**
+
+Key changes: see [docs/v0.2-to-v0.3-migration.md](docs/v0.2-to-v0.3-migration.md). Optional dry-run helper: `python scripts/migrate_v023_to_v030.py` scans already-ingested materials and outputs a candidate list (**does NOT auto-mv**).
+
+## 9. License + feedback
 
 **LICENSE**: MIT — see [LICENSE](LICENSE)
 
