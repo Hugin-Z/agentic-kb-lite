@@ -68,6 +68,7 @@ v0.2.2 5 Layer(key / type / non_empty / field-rules / path-traversal)+ v0.3 Laye
 ## 致谢
 
 - **Codex** 测试仓库 trialV3 现场反馈:tier 分层 + 5 类 + 8 条 plan 修订建议
+- **Codex 终审反馈 4 条**(中 1 + 低 3):archives tier 契约 / README 中英命令同步 / plan 状态残留 / E11 措辞精确化。全部修完, no blockers。
 - **Hugin** 拍板修订:AI 填 tier 不写硬规则 / `.shelved` 命名 / 三 bucket 适用 / dry-run only migration
 - **v0.3 节奏**:整体走完 PER 5 阶段后 Codex 一次终审,通过才 release(不沿用 v0.2.2 hotfix 每轮审)
 
@@ -98,6 +99,10 @@ v0.3 阶段 4A 跑 E11 fixture 时发现阶段 3 smoke [16/16] 假阳:加 `--dee
 ### V1-V7 vision 路径本地无法跑回归
 
 V 系 fixtures 需要 vision 推理 + ffmpeg/poppler 依赖。本 release 沿用 v0.2.x 阶段 5 W-2 deferred 状态,**留 release 后用户实测**。
+
+### archives bucket frontmatter 强制规范化
+
+`04-archives` bucket 不走 tier 协议。AI 在 plan 手填的 `kb_tier / kb_default_search / family_key` 会被忽略,archives 落地 frontmatter 强制为 `kb_tier=normal + kb_default_search=true`。这是 by-design(archives 是 PARA 归档层,不再参与 tier 分类),不是 bug。
 
 ---
 
