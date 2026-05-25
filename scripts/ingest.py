@@ -33,7 +33,14 @@ INGEST_LOG = REPO / "logs" / "ingest_log.jsonl"
 BINARY_EXTS = {".docx", ".doc", ".xlsx", ".pptx", ".pdf",
                # v0.2 阶段 4:vsdx + odf 三件加入 markitdown 主流程
                ".vsdx", ".odt", ".ods", ".odp"}
-TEXT_EXTS = {".html", ".txt", ".md", ".json"}
+TEXT_EXTS = {
+    ".html", ".txt", ".md", ".json",
+    # v0.2.3 5th-1(Codex 测试仓库真实素材现场反馈):常见脚本 / 表格 / GIS 文本文件,
+    # 按原文 shutil.copy2 入库即可被 ripgrep 检索;不需要 markitdown 转换。
+    # .py:用户脚本 / .csv:表格 / .geojson:GIS 矢量 / .xml:配置/数据交换
+    # .cpg / .prj / .meta / .tfw:GIS 元数据小文件(投影 / 字符集 / 地理参考)
+    ".py", ".csv", ".geojson", ".xml", ".cpg", ".prj", ".meta", ".tfw",
+}
 
 # v0.2 阶段 4:vsdx 走 LibreOffice headless 转 PDF 后接现有 G15/G16 路径;
 # LibreOffice 不可用时永久 stub 标 failed_no_libreoffice(plan §7.3 步骤 4.3)
