@@ -247,6 +247,15 @@ def make_stub(src_path, scene, rule_id, density=None, char_count=None,
         llm_hint = ("**LLM 处理规则**:本 stub 仅含元数据,vision 正文未转写完成;"
                     "回答时只可说\"该问题相关素材是视频,vision 正文未入库;请打开源路径或等待 vision 转写\","
                     "**禁止**对视频内容做任何推断。")
+    elif rule_id == "MARKITDOWN_FAILED_STUB":
+        # v0.2.3 5th-3(Codex 测试仓库反馈):markitdown 装得不全(如缺 [docx])或文件本身坏,
+        # 转换失败时不再走 ERROR_MARKITDOWN_FAILED 阻断单个 item,改为降级"源文件 + stub"。
+        # 源文件已 cp 到 corpus 同目录;用户后续装齐依赖或换工具后,重跑 ingest 即可重入正文。
+        status = f"未入库正文(binary-{ext},markitdown 转换失败,已复制源文件并生成元数据 stub)"
+        note = "markitdown 转换失败的降级 stub。源文件已复制到 corpus 同目录;如需正文检索,需安装对应转换依赖或补充专用解析器后重跑。"
+        llm_hint = ("**LLM 处理规则**:本 stub 仅含元数据,正文未入库;"
+                    "回答时只可说明素材已保留为源文件并建议打开源文件查看,"
+                    "**禁止**对未解析正文内容做任何推断。")
     else:
         status = (f"已转 markdown 正文(同目录 .md 文件;"
                   f"G16 三件共存形态:源 binary + 本 stub + .md")
@@ -866,8 +875,29 @@ def process_file_with_explicit_target(item: dict, dry_run: bool, md_engine_holde
                                   "odf 降级:markitdown 未带 ODF converter,永久 stub")
                 log_action(rec)
                 return rec
-            rec = make_record(src_path, target_rel, "ERROR_MARKITDOWN_FAILED", "v0.2-plan-routed",
-                              src_size, None, f"markitdown 异常: {e}")
+            # v0.2.3 5th-3(Codex 测试仓库反馈):非 ODF 类 binary 的 markitdown 失败,
+            # 不再走 ERROR_MARKITDOWN_FAILED 单 item 阻断 + 不入库;改为降级 MARKITDOWN_FAILED_STUB
+            # (源文件 + stub + frontmatter 注入),让用户后续装齐依赖后重跑 ingest 可重入正文。
+            # ODF 已有专属降级路径(STUB_ONLY_ODF_NO_CONVERTER),保留不动。
+            target_dir.mkdir(parents=True, exist_ok=True)
+            stub_path = target_dir / f"{prefixed_name}.stub.md"
+            stub_path.write_text(
+                make_stub(src_path, scene, "MARKITDOWN_FAILED_STUB",
+                          source_abs_path=str(src_path), prefixed_name=prefixed_name),
+                encoding="utf-8")
+            stub_extra = (f"\n- converter_status: failed_markitdown\n"
+                          f"- 降级原因: markitdown 无法转换该 binary;源文件已复制,正文未入库\n"
+                          f"- 修复方案: 装齐 markitdown extra(如 markitdown[docx])或换专用解析器后重跑 ingest\n"
+                          f"- markitdown 异常: {e}\n")
+            with open(stub_path, "a", encoding="utf-8") as f:
+                f.write(stub_extra)
+            shutil.copy2(src_path, target_src)
+            if frontmatter:
+                inject_frontmatter(stub_path, frontmatter)
+            rec = make_record(src_path, norm_path(stub_path.relative_to(REPO)),
+                              "STUB_ONLY_MARKITDOWN_FAILED", "MARKITDOWN_FAILED_STUB",
+                              src_size, stub_path.stat().st_size,
+                              "markitdown 转换失败,降级为源文件 + stub")
             log_action(rec)
             return rec
 
