@@ -730,30 +730,74 @@ def _validate_tier_field(item: dict, plan_schema_version: str | None = None) -> 
 
 
 def _build_target_dir(item: dict) -> Path:
-    """从 plan item 构造 corpus 内 target_dir 绝对路径。
-    调用前必须先经 `_validate_plan_item_paths` 校验(P0-2)。
-    末尾再 resolve + 边界 sanity check:确保拼出来的路径在 CORPUS 内。"""
+    """v0.3 阶段 2:三 bucket(projects / areas / resources)支持 tier 路由 → .shelved/<tier>/。
+
+    详见 docs/v0.3-plan.md §5.3 步骤 2.1。
+
+    路由表:
+      tier=canonical/normal → 现有 5 子目录结构(行为同 v0.2.3,前提是 _validate 已过)
+      tier=working/assets   → <bucket>/<subdir 可多级>/.shelved/<tier>/<subdir 末段>(projects)
+                              或 <bucket>/<subdir 可多级>/.shelved/<tier>/(areas / resources)
+      tier=versions         → <bucket>/<...>/.shelved/versions/<family_key>/
+      bucket=04-archives    → 不走 tier(即使 plan 给了 tier 也忽略)
+
+    defense-in-depth(Codex-8 反馈):
+      - multi-level subdir split(.strip("/").split("/"))避免多级 subdir 当字面量
+      - resolve + relative_to(CORPUS) 拦截任何 escape(.. / symlink / 异常字符)
+
+    调用前必须先经 `_validate_plan_item_paths` 校验(Layer 1-6)。"""
     bucket = item["target_bucket"]
-    parts = [bucket]
-    if bucket == "01-projects":
-        parts.append(item["target_project"])
-        parts.append(item["target_subdir"])
+    tier = item.get("tier", "normal")  # v0.2 旧 plan 兜底默认 normal
+
+    if bucket == "04-archives":
+        # archives 不走 tier(已是 PARA 归档层)
+        target_dir = CORPUS / bucket / item.get("target_project", "")
+    elif tier in ("canonical", "normal"):
+        # 主知识 / 一般材料走现有结构
+        if bucket == "01-projects":
+            target_dir = (CORPUS / bucket / item["target_project"] / item["target_subdir"])
+        else:
+            # areas / resources:CORPUS/bucket/<subdir 可多级>
+            target_dir = CORPUS / bucket
+            for seg in item["target_subdir"].strip("/").split("/"):
+                target_dir = target_dir / seg
+    elif tier in ("working", "assets"):
+        # 三 bucket 都有 .shelved/<tier>/
+        if bucket == "01-projects":
+            # projects:proj/.shelved/<tier>/<subdir 末段>(沿用 5 子目录语义)
+            target_dir = (CORPUS / bucket / item["target_project"]
+                          / ".shelved" / tier / item["target_subdir"])
+        else:
+            # areas / resources:CORPUS/bucket/<subdir 可多级>/.shelved/<tier>/(B 分散)
+            target_dir = CORPUS / bucket
+            for seg in item["target_subdir"].strip("/").split("/"):
+                target_dir = target_dir / seg
+            target_dir = target_dir / ".shelved" / tier
+    elif tier == "versions":
+        # versions 用 family_key 分组(Layer 6.3 已校验 family_key 非空 + 无 Win 非法字符)
+        family_key = item["family_key"]
+        if bucket == "01-projects":
+            target_dir = (CORPUS / bucket / item["target_project"]
+                          / ".shelved" / "versions" / family_key)
+        else:
+            target_dir = CORPUS / bucket
+            for seg in item["target_subdir"].strip("/").split("/"):
+                target_dir = target_dir / seg
+            target_dir = target_dir / ".shelved" / "versions" / family_key
     else:
-        # 02-areas / 03-resources / 04-archives:target_subdir 可能是多级(如 '产品方案库/子目录')
-        sub = item.get("target_subdir") or ""
-        if sub:
-            parts.extend(sub.strip("/").split("/"))
-    target_dir = CORPUS.joinpath(*parts)
-    # 二次防御:resolve 后必须在 CORPUS 内(若校验已拒 .. 则此步永真,但保留作 defense in depth)
+        # _validate_tier_field Layer 6.2 已拒非白名单,这里 raise 是双保险
+        raise ValueError(f"unknown tier: {tier}")
+
+    # 二次防御:resolve 后必须在 CORPUS 内(沿用 v0.2.1 P0-2 defense-in-depth)
     corpus_resolved = CORPUS.resolve()
     target_resolved = target_dir.resolve()
     try:
         target_resolved.relative_to(corpus_resolved)
     except ValueError:
         raise ValueError(
-            f"target 路径不在 corpus 内: {target_resolved} (corpus={corpus_resolved})"
+            f"resolved target_dir escapes CORPUS: {target_resolved} (CORPUS={corpus_resolved})"
         )
-    return target_dir
+    return target_dir  # 返回未 resolve 的 Path,保留 .shelved 等相对结构展示
 
 
 def _scene_label(item: dict) -> str:
