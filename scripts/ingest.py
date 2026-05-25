@@ -47,7 +47,9 @@ TEXT_EXTS = {
 VSDX_EXT = ".vsdx"
 
 # v0.3 多模态接入(沿用 v0.1):图像 + 视频走 vision 待转
-IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".gif", ".bmp", ".webp"}
+# v0.2.3 5th-2:加 .tif/.tiff(Codex 测试仓库现场反馈;TIFF 是 GIS 业务高频遥感影像格式,
+# Claude Code 内置 vision 能力直接 Read 即可识别,沿用路径 A 无需新增依赖)
+IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".gif", ".bmp", ".webp", ".tif", ".tiff"}
 VIDEO_EXTS = {".mp4", ".mov", ".avi", ".mkv", ".wmv", ".flv", ".webm", ".m4v", ".mpg", ".mpeg"}
 
 DENSITY_THRESHOLD = 0.05      # G18 触发的字符密度上限(< 5%)
