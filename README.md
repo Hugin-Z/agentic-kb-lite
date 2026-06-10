@@ -341,7 +341,7 @@ agentic-kb-lite/
 python scripts/smoke_test.py
 ```
 
-4 个 assert(install 调用参数 / scan-only / 路径边界拒绝 malformed / 关键依赖 import),~3 秒跑完。任一失败说明环境有缺。**完整自动化测试见 [scripts/smoke_test.py](scripts/smoke_test.py)**。
+17 个 assert(覆盖 install 调用参数 / scan-only / plan schema 三层校验 / 失败降级 stub / tier 路由 / search --deep / recipe 接口 等),跑完即知环境是否完整。任一失败说明环境有缺。**完整自动化测试见 [scripts/smoke_test.py](scripts/smoke_test.py)**。
 
 ## 6. 完整文档导航
 
