@@ -39,6 +39,7 @@ What makes this different:
 | **Four-level fallback retrieval** | Body `.md` → tokenized fuzzy → vision transcription → stub metadata; each level falls back honestly on failure (L1/L2/L2.5/L3 scope-exclusive; **executed by the AI coding assistant in the CLAUDE.md state-segment workflow**, not embedded in `search.py`)|
 | **Multimodal integration** | Image-heavy PPT / scanned PDF / video — all read by the AI coding assistant's built-in vision; videos go through ffmpeg frame extraction |
 | **Incremental ingest** | `python ingest.py <path>` defaults to incremental (skips already-ingested unchanged files); `--full` forces a full pass |
+| **Dirty-document preprocessing recipe** (v0.4) | When converting G16 binary files to `.md`, a baseline recipe cleans markitdown's "half-dirty" output with 5 literal passes (orphan-line merge / blank-line compression / table-row padding / control-char cleanup / conservative cross-page table merge); pluggable interface, falls back to raw markitdown on failure. Adds a `recipe_applied` frontmatter field on the G16 `.md` only (experimental: ships a full-capability skeleton; real-corpus tuning is left to the user) |
 | **Honest-fallback red line** | If nothing is found, say so; never fabricate. Scanned PDF / image-heavy PPT fall back to stub when toolchain is incomplete |
 | **Lightweight fixture evaluation** | E1–E7 agent loop scenarios + V1–V4 vision/video scenarios — reproducible regression tests |
 | **This project doesn't call external APIs** | This repo's code **does not call any external API**; all inference is done by the AI coding assistant you're using. **Caveat**: whether the assistant uploads files to cloud inference depends on its product mechanism — see §1 Privacy boundary |
@@ -330,6 +331,7 @@ agentic-kb-lite/
 - **No real-time delete-source sync** in the ingest pipeline (incremental ingest exists, but is manually triggered)
 - **No restructuring of existing files / no renaming** (except governance rule G14 prefixes)
 - **No parsing of PPT / video non-visual parts** (entered as AI-coding-assistant vision-transcribed text)
+- **No pre-tuning of recipe parameters for the user** (the v0.4 recipe is a full-capability baseline skeleton with an experimental stance: real-corpus retrieval-gain validation / tuning is left to the actual user with their own corpus; this repo only ships deterministic transform-correctness unit tests. No semantic-level cleanup / field extraction / header semantic recognition / 3+-table merge — true refinement would be a future standalone recipe)
 
 ### 5.1 Format-specific handling (v0.2 stage 4)
 
