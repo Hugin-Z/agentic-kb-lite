@@ -33,6 +33,7 @@ tool-agnostic 落点:接口稳定,实现内部可 wrap 任何工具(subprocess /
 ### G16 binary `.md` 路径接入 + `recipe_applied` frontmatter 字段
 
 - recipe hook **只在 G16 binary `.md` 路径**(markitdown 转出正文那一份)。**text / image / video / G15 / G18 分支不经 recipe,frontmatter 不加 `recipe_applied` 字段**(无 schema 污染)。
+- **例外:`.vsdx` 正向转换路径不经 recipe**。`.vsdx`(LibreOffice headless → PDF → markitdown)产出的 `.md` 虽记 `vsdx+G16`,但由独立代码路径写盘,**不经 recipe hook、不写 `recipe_applied` 字段**(recipe 5 能力针对表格 / 段落结构;vsdx 的 markitdown 输出为图形标签拼接,无适用结构)。
 - G16 `.md` frontmatter 新增 `recipe_applied`:`baseline`(已加工)/ `none`(透传未改)/ `failed`(异常)。
 - recipe 只动 markitdown 正文;其后 append 的 `.docx` 嵌入表 / 嵌入图段不经 recipe(它们是 python-docx / vision 另一条产物)。
 - `INGESTED_MD` 的 ingest_log notes 附 `recipe=<状态>(动作摘要)`,便于追溯做了哪几项。
