@@ -240,6 +240,40 @@ explicit_mappings:
 
 ---
 
+## recipes/ 脏文档预处理 recipe 层(v0.4 新增)
+
+ingest 在 G16 文本主导分流确定后、frontmatter 注入前,把 markitdown 的“半脏”输出过一道 recipe 加工,使其更适合 ripgrep 字面检索。recipe 失败 → fallback markitdown 原版(诚实降级,不阻断 ingest)。
+
+### 接口(`scripts/recipes/__init__.py`)
+
+- `Recipe`(抽象基类):`applicable(src_path, markitdown_text) -> bool` + `process(src_path, markitdown_text) -> RecipeResult`
+- `RecipeResult`(dataclass):`text`(加工后文本)/ `applied`(是否真加工)/ `recipe_name` / `notes`(动作摘要,写 ingest_log)
+- `get_recipe(name="baseline") -> Recipe`:registry 入口(写死 dict,默认 baseline;惰性 import 实现类。**不引入动态加载 / 配置驱动 / CLI 注册参数**)
+
+### baseline(`scripts/recipes/baseline.py`,零新依赖纯 stdlib)
+
+5 项字面后处理:
+
+1. **孤立行合并**(保守:相邻非结构行、上行行尾无标点才合;CJK 衔接不加空格)
+2. **重复空白行压缩**(连续 ≥3 空行 → 2 空行)
+3. **表格行 padding**(块内列数不齐 → 按本块最大列数补空单元格)
+4. **控制字符清理**(NBSP / 全角空格 → 普通空格;零宽字符 → 删除)
+5. **跨页表合并**(最保守一档:相邻两表列数相同 + 下表首行重复表头 + 上表末行非汇总行,全满足才合并、删下表重复表头;判不准就不合 —— 宁可漏合不可误合)
+
+baseline **不做**:语义级清洗 / 字段抽取 / 表头语义识别 / 跨 3+ 表连续合并 / 列数不等对齐猜测 / 表头模糊匹配 —— experimental 骨架,真实语料检索增益验证 / 调参由使用者用自有语料完成。
+
+### ingest 接入 + frontmatter 标记
+
+- hook **只在 G16 binary `.md` 路径**(text / image / video / G15 / G18 分支不经 recipe)
+- G16 `.md` frontmatter 加 `recipe_applied`:`baseline`(已加工)/ `none`(透传未改)/ `failed`(异常 → fallback markitdown 原版)
+- ingest_log 的 `INGESTED_MD` notes 附 `recipe=<状态>(动作摘要)`
+
+### 测试
+
+`python scripts/recipes/test_baseline.py` —— 5 能力确定性单测(合成输入 → 人工写定预期),退出码 0 = 5/5 全过。详见 `tests/查询记录.md` C 系段。
+
+---
+
 ## archive_check.py(v0.2 新增)
 
 ```bash
