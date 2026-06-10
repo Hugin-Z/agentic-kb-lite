@@ -25,6 +25,8 @@ from pathlib import Path
 
 import yaml
 
+from recipes import get_recipe  # v0.4 脏文档预处理 recipe 层(G16 写盘前 hook)
+
 REPO = Path(__file__).resolve().parent.parent
 CORPUS = REPO / "corpus"
 PATH_MAP_FILE = REPO / "path_map.yaml"
@@ -1077,6 +1079,26 @@ def process_file_with_explicit_target(item: dict, dry_run: bool, md_engine_holde
         # G16 三件共存
         md_path = target_dir / f"{prefixed_name}.md"
         stub_path = target_dir / f"{prefixed_name}.stub.md"
+
+        # v0.4 recipe 层:G16 文本主导分流确定后、写盘前,把 markitdown 半脏输出过一道
+        # recipe 加工(plan §3 D1/D3/D5)。任何异常 → fallback markitdown 原版(诚实降级,
+        # 不阻断 ingest)+ frontmatter recipe_applied: failed。recipe 只动 markitdown 正文,
+        # 下面 append 的嵌入表 / 嵌入图段不经 recipe(它们是 python-docx / vision 另一条产物)。
+        recipe_applied = "none"
+        recipe_notes = ""
+        try:
+            recipe = get_recipe()
+            if recipe.applicable(str(src_path), md_text):
+                rr = recipe.process(str(src_path), md_text)
+                if rr.applied:
+                    md_text = rr.text
+                    recipe_applied = rr.recipe_name
+                    recipe_notes = rr.notes
+        except Exception as e:
+            recipe_applied = "failed"
+            recipe_notes = f"recipe 异常,fallback markitdown 原版: {e}"
+        frontmatter["recipe_applied"] = recipe_applied
+
         md_path.write_text(md_text, encoding="utf-8")
 
         # v0.2 阶段 4 步骤 4.2:.docx 嵌入表用 python-docx 抽取,append 到 .md 末尾作为补充段
@@ -1117,7 +1139,8 @@ def process_file_with_explicit_target(item: dict, dry_run: bool, md_engine_holde
             fm_status = inject_frontmatter(md_path, frontmatter)
         rec = make_record(src_path, norm_path(md_path.relative_to(REPO)),
                           "INGESTED_MD", "G16", src_size, md_path.stat().st_size,
-                          f"三件共存,密度 {density:.1%},frontmatter={fm_status}"
+                          f"三件共存,密度 {density:.1%},frontmatter={fm_status},recipe={recipe_applied}"
+                          f"{f'({recipe_notes})' if recipe_notes else ''}"
                           f"{f',嵌入表 {len(docx_tables)} 个' if docx_tables else ''}"
                           f"{f',嵌入图 {len(va_paths)} 张(原 {va_raw})' if va_paths else ''}",
                           char_density=density)
