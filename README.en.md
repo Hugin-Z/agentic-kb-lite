@@ -38,7 +38,7 @@ What makes this different:
 | **Multi-round agent loop retrieval** | LLM iterates retrieval terms (expand / narrow / shift angle); hard cap of 3 rounds, ≤ 12 total tool calls |
 | **Four-level fallback retrieval** | Body `.md` → tokenized fuzzy → vision transcription → stub metadata; each level falls back honestly on failure (L1/L2/L2.5/L3 scope-exclusive; **executed by the AI coding assistant in the CLAUDE.md state-segment workflow**, not embedded in `search.py`)|
 | **Multimodal integration** | Image-heavy PPT / scanned PDF / video — all read by the AI coding assistant's built-in vision; videos go through ffmpeg frame extraction |
-| **Incremental ingest** | `python ingest.py <path>` defaults to incremental (skips already-ingested unchanged files); `--full` forces a full pass |
+| **AI-assisted ingest** | `scan-only` scans the source dir → AI produces `routing_plan.json` → `execute-plan` lands files; re-runs skip already-ingested unchanged files (incremental) |
 | **Dirty-document preprocessing recipe** (v0.4) | When converting G16 binary files to `.md`, a baseline recipe cleans markitdown's "half-dirty" output with 5 literal passes (orphan-line merge / blank-line compression / table-row padding / control-char cleanup / conservative cross-page table merge); pluggable interface, falls back to raw markitdown on failure. Adds a `recipe_applied` frontmatter field on the G16 `.md` only (experimental: ships a full-capability skeleton; real-corpus tuning is left to the user) |
 | **Honest-fallback red line** | If nothing is found, say so; never fabricate. Scanned PDF / image-heavy PPT fall back to stub when toolchain is incomplete |
 | **Lightweight fixture evaluation** | E1–E7 agent loop scenarios + V1–V4 vision/video scenarios — reproducible regression tests |
@@ -62,7 +62,7 @@ This repo is designed to work with **AI coding assistants like Claude Code / Cod
 │   3. setup_system_tools.bat  (optional: detect ffmpeg/poppler)   │
 │                              │                                   │
 │                              ▼                                   │
-│   4. Edit path_map.yaml      (point 1-2 source paths)            │
+│   4. path_map.yaml (usually skip; AI auto-routes)                │
 │                              │                                   │
 │                              ▼                                   │
 │   5. Open repo in AI helper  ("read README + CLAUDE.md first")   │

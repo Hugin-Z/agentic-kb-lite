@@ -36,7 +36,7 @@
 | **agent loop 多轮检索** | LLM 自动迭代检索词(扩展 / 收窄 / 换角度),3 轮硬上限,工具调用累计 ≤ 12 次 |
 | **4 级降级检索** | 正文 .md → 拆词模糊 → vision 转写文件 → stub 元数据,每级失败诚实降级(L1/L2/L2.5/L3 scope 排他,**由 AI 编程助手在 CLAUDE.md 状态段执行**,非 `search.py` 内嵌)|
 | **多模态接入** | 图为主 PPT / 扫描 PDF / 视频均由 AI 编程助手内置 vision 能力直接读;视频走 ffmpeg 抽帧 |
-| **增量 ingest** | `python ingest.py <path>` 默认增量,跳过已 ingest 且未变文件;`--full` 强制全量 |
+| **AI 辅助入库** | `scan-only` 扫源目录 → AI 产出 `routing_plan.json` → `execute-plan` 落地;重跑时已入库且未变化文件自动跳过(增量) |
 | **脏文档预处理 recipe**(v0.4) | G16 binary 转 .md 时,baseline recipe 对 markitdown“半脏”输出做 5 项字面清理(孤立行合并 / 空白压缩 / 表格行 padding / 控制字符 / 保守跨页表合并);可插拔接口,失败 fallback markitdown 原版(experimental:提供能力齐全骨架,真实语料调参由使用者完成) |
 | **诚实降级红线** | 找不到就说找不到,严禁补全;扫描 PDF / 图为主 PPT 工具链不全时走 stub 兜底 + 提示 |
 | **轻量 fixture 评估** | E1-E7 agent loop 场景 + V1-V4 vision/视频场景,可复现回归测试 |
@@ -60,7 +60,7 @@
 │   3. setup_system_tools.bat  (可选:检测 ffmpeg / poppler)        │
 │                              │                                   │
 │                              ▼                                   │
-│   4. 编辑 path_map.yaml      (改 1-2 条 source 路径)              │
+│   4. path_map.yaml(通常跳过,AI 自动路由)                          │
 │                              │                                   │
 │                              ▼                                   │
 │   5. AI 编程助手打开仓库     ("先读 README + CLAUDE.md")          │
