@@ -1,0 +1,17 @@
+name: smoke
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+jobs:
+  smoke:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: pip install -r requirements.txt
+      - run: python scripts/recipes/test_baseline.py
+      - run: python scripts/smoke_test.py
