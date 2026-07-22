@@ -1,6 +1,7 @@
 # corpus/.fixtures/ — E 系 + V 系评估场景固定 fixtures
 
-> 本目录为 `tests/查询记录.md` E 系评估场景(E1-E5,agent loop)与 V 系评估场景(V1-V4,vision)的本地回归测试数据。
+> 本目录为 `tests/查询记录.md` E 系评估场景(agent loop)与 V 系评估场景(vision)的本地回归测试数据。
+> **当前 17 个场景子目录**:E 系 10 个(E1-E9 + E11;**E10 是 `search.py --project` 纯 CLI 场景,不需要独立 fixture 目录**)+ V 系 7 个(V1-V7)。
 > **不参与主 corpus 检索**;评估场景测试时,LLM 必须显式将 ripgrep 路径传 `corpus/.fixtures/<场景目录>/`,主 corpus 不被扫到(详见 `CLAUDE.md` 第 5.5 节)。
 > 配套契约首次落地版本:E 系 = `CLAUDE.md` v0.2;V 系 = `CLAUDE.md` v0.3。
 
@@ -30,6 +31,12 @@
 | `V2_scan_pdf/`    | V2 扫描 PDF 失败降级 | 1 个真扫描 PDF(0 Font + 12 Image + markitdown 0 字符)+ 1 份 .stub.md(`vision_status: failed_no_pdf_converter`);用户机未装 poppler / ImageMagick / LibreOffice,vision 无法跑通,测"失败降级"诚实性。**注**:V2 PDF 实际素材是国标 GBT35958(公开文档,用户本地保留作实证现场),开源仓通过 `tests/*.pdf` `.gitignore` 不 track;V2 stub 描述足以解释场景,无需 PDF 也能跑评估 |
 | `V3_short_video/` | V3 短视频极短-全帧 | 1 个合成 6 秒 mp4(6 张纯色帧切换,6 KB)+ 1 份 .vision.md(全帧策略 fps=1)+ 1 份 .stub.md;frames_dir 已按工作流清理 |
 | `V4_medium_video/`| V4 中等视频双层逻辑 | 1 个合成 5 分钟 mp4(100 个 3 秒色块切换,211 KB)+ 1 份 .vision.md(双层降级链触底:scene 0.3 → 0.1 → 1/6s 均匀采样 50 帧)+ 1 份 .stub.md(`vision_quality: low`);frames_dir 已清理 |
+| `E8_scope_routing/` | E8 scope 路由(v0.2 阶段 5)| 3 个 .md 分置 `01-projects/` / `02-areas/` / `03-resources/` 三 bucket,验证 CLAUDE.md §5 PARA 关键词路由选对 scope |
+| `E9_behavior/` | E9 行为识别(v0.2 阶段 5)| 3 个项目 × 6 个 .md(方案 / 纪要 / 章节混合),验证 4 类行为(单点定位 / 盘点 / 决策溯源 / 模糊探索)+ 2 个 mixed 触发词冲突 case |
+| `E11_tier_routing/` | E11 tier 路由(v0.3)| 4 类 tier × 4 文件:`01-方案/最终方案.md`(canonical/normal)+ `.shelved/working/build_demo.py` + `.shelved/versions/总体方案_md/v1.md` + `.shelved/assets/screenshot.md`,各带独特 marker;验证默认检索排除 `.shelved/` 与 `--deep` 命中 |
+| `V5_embedded_image/` | V5 docx 嵌入图(v0.2 阶段 4)| 1 个合成 .docx(含嵌入图)+ EXPECTED.md;验证 zipfile 解图三闸 + vision 转写注入主 .md 末尾 `## 嵌入图 vision 转写` 段 |
+| `V6_embedded_table/` | V6 docx 嵌入表(v0.2 阶段 4)| 1 个合成 .docx(含表格)+ EXPECTED.md;验证 python-docx 表格抽取补段 |
+| `V7_vsdx/` | V7 vsdx 降级路径(v0.2 阶段 4)| 1 个合成 .vsdx + EXPECTED.md;**本机未装 LibreOffice,只验降级分支**(`failed_no_libreoffice` 永久 stub),正向转换路径未实证 |
 
 ---
 

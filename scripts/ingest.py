@@ -260,7 +260,7 @@ def make_stub(src_path, scene, rule_id, density=None, char_count=None,
                     "**禁止**对未解析正文内容做任何推断。")
     elif rule_id == "UNSUPPORTED_COPY_STUB":
         # v0.2.3 5th-4(Codex 测试仓库反馈):暂不支持扩展名的保底 stub。
-        # 跟 README §5.1 "shp 不在检索范围"的设计原则一致 — stub 不参与正文检索,只标记
+        # 跟 docs/格式支持边界.md §2 "shp 不在检索范围"的设计原则一致 — stub 不参与正文检索,只标记
         # 文件存在;未来若加专用解析器(如 GDAL 读 .shp/.dbf),重跑 ingest 即可重入正文。
         status = f"未入库正文(暂不支持自动转写的 {ext} 文件,已复制源文件并生成元数据 stub)"
         note = "暂不支持扩展名的保底 stub。源文件已复制到 corpus 同目录;如需正文检索,需后续补充专用解析器。"
@@ -1205,10 +1205,10 @@ def process_file_with_explicit_target(item: dict, dry_run: bool, md_engine_holde
     # v0.2.3 5th-4(Codex 测试仓库反馈):暂不支持扩展名的保底降级。
     # v0.2.2 行为是 ERROR_UNSUPPORTED_EXT → 单 item 入库失败 + 不入库 + 报错。
     # 真实场景下 GIS 业务有大量 .shp/.dbf/.shx/.qix/.zip/.fcs/.ovr 等暂不支持解析的
-    # 中小文件(README §5.1 也说 shp 不在检索范围,但用户可能想保留为 stub 待后续解析)。
+    # 中小文件(docs/格式支持边界.md §2 也说 shp 不在检索范围,但用户可能想保留为 stub 待后续解析)。
     # 改为复制源文件 + 元数据 stub,避免材料在入库时丢失;LLM 检索时禁令仍要求
-    # "建议打开源文件查看",**不会推断未解析正文**(语义跟 README §5.1 "shp 不在检索范围"
-    # 一致 — stub 不参与正文检索,只标记文件存在)。
+    # "建议打开源文件查看",**不会推断未解析正文**(语义跟 docs/格式支持边界.md §2
+    # "shp 不在检索范围" 一致 — stub 不参与正文检索,只标记文件存在)。
     if dry_run:
         return make_record(src_path, target_rel, "DRY_RUN_UNSUPPORTED_STUB", "UNSUPPORTED_COPY_STUB",
                            src_size, None, f"[dry-run] 暂不支持扩展名 {ext},将复制源文件并生成 stub")

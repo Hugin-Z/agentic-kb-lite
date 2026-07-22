@@ -33,7 +33,16 @@
 
 # 正则模式(默认 fixed-strings 字面匹配,正则需显式开)
 .venv\Scripts\python.exe scripts/search.py --scope projects --terms "原型-V[0-9]+" --regex
+
+# 追溯过程材料 / 旧版本 / 素材(v0.3 新增 --deep)
+.venv\Scripts\python.exe scripts/search.py --scope all --terms "之前的 build 脚本" --deep
 ```
+
+### `--deep`:追溯 `.shelved/` 与 `.archive/`(v0.3 新增)
+
+默认 `search.py` **不搜 `.shelved/` 与 `.archive/` 内容**(噪声分离 —— 过程脚本 / 旧版本 / 大素材不污染日常检索)。追溯时加 `--deep`:它同时去掉 glob 排除**并给 rg 加 `--hidden`**(真扫隐藏目录;v0.3.0 阶段 4A W-v0.3-阶段3-W1 修 —— 阶段 3 只去 glob 没加 `--hidden`,导致隐藏目录实际仍扫不到)。
+
+用户问法含"之前 / 历史 / 草稿 / 版本 / 旧 / 过程 / 脚本"等关键词时,LLM 倾向加 `--deep`;常规检索问法默认不加。tier ↔ `.shelved/` 落位对照见 [docs/structure.md §2](../docs/structure.md),阈值规则见 [CLAUDE.md §5.6.4](../CLAUDE.md)。
 
 **匹配模式**:默认走 `--fixed-strings` 字面匹配,**含正则特殊字符的检索词(括号 / 星号 / 方括号 / `+` / `?` / `.` 等)安全**——例如 `Kingbase(` / `CIM*` / `[CIM]` 都按字面查,不会触发 rg 正则错误。需要正则模式显式加 `--regex`;此模式下检索词若语法错误,rg 会报错停(returncode ≥ 2),search.py 会原样抛出 stderr 不再静默吞错。
 
@@ -163,6 +172,69 @@ search.py 输出 header 会显示当前命中:`(来源: bundled)` 或 `(来源: 
 
 **典型工作流**:用户对 Claude Code 说"把 D:/工作目录/某项目 入库",Claude Code 自动跑 scan-only → 产 routing_plan → 展示给用户过目 → 跑 execute-plan,一气呵成不打扰用户。详见 [CLAUDE.md §6 PARA 路由协议](../CLAUDE.md)。
 
+### routing_plan.json 样例(AI 产出格式参考)
+
+AI 跑完 `scan-only` 后产出的 `routing_plan.json` 长这样(5 items 简化示例,覆盖典型场景):
+
+```json
+{
+  "src_root": "D:/工作目录/智慧城市可视化平台",
+  "plan_timestamp": "2026-05-22T10:00:00",
+  "ai_judgment_summary": "顶层判为 01-projects;标准/ 脱钩到 03-resources/国标行标 + 项目前缀消歧;纪要/ 留在项目内 03-纪要/;已交付/ 进 04-archives;explicit_mappings 命中覆盖 1 条",
+  "items": [
+    {
+      "src_abs": "D:/工作目录/智慧城市可视化平台/总体方案.docx",
+      "target_bucket": "01-projects",
+      "target_project": "智慧城市可视化平台",
+      "target_subdir": "01-方案",
+      "target_filename": "总体方案.docx",
+      "frontmatter": {"type": "方案", "date": "2026-03-15", "project": "智慧城市可视化平台", "tags": []},
+      "ai_reason": "Step D:文件名含'方案' + 项目顶层 → 01-方案/"
+    },
+    {
+      "src_abs": "D:/工作目录/智慧城市可视化平台/标准/CIM技术规范.pdf",
+      "target_bucket": "03-resources",
+      "target_project": null,
+      "target_subdir": "国标行标",
+      "target_filename": "智慧城市可视化平台_CIM技术规范.pdf",
+      "frontmatter": {"type": "国标", "date": "2024-12-01", "project": null, "tags": ["CIM"]},
+      "ai_reason": "Step C:标准/ 子目录 = 跨项目可复用 → 脱钩到 03-resources/国标行标/;target_filename 加项目前缀消歧"
+    },
+    {
+      "src_abs": "D:/工作目录/智慧城市可视化平台/纪要/2026-03-10客户沟通.docx",
+      "target_bucket": "01-projects",
+      "target_project": "智慧城市可视化平台",
+      "target_subdir": "03-纪要",
+      "target_filename": "2026-03-10客户沟通.docx",
+      "frontmatter": {"type": "纪要", "date": "2026-03-10", "project": "智慧城市可视化平台", "tags": []},
+      "ai_reason": "Step D:父目录'纪要/' + 文件名含日期 → 03-纪要/(date 取文件名)"
+    },
+    {
+      "src_abs": "D:/工作目录/智慧城市可视化平台/已交付/初验报告.pdf",
+      "target_bucket": "04-archives",
+      "target_project": null,
+      "target_subdir": "智慧城市可视化平台",
+      "target_filename": "初验报告.pdf",
+      "frontmatter": {"type": "验收", "date": "2025-12-20", "project": "智慧城市可视化平台", "tags": ["已交付"]},
+      "ai_reason": "Step B:父目录名含'已交付' → 04-archives/(archives_hint 命中)"
+    },
+    {
+      "src_abs": "D:/工作目录/智慧城市可视化平台/合同/某合同.pdf",
+      "target_bucket": "02-areas",
+      "target_project": null,
+      "target_subdir": "合同档案",
+      "target_filename": "智慧城市可视化平台_某合同.pdf",
+      "frontmatter": {"type": "合同", "date": "2026-01-15", "project": null, "tags": ["合同档案"]},
+      "ai_reason": "Step A:explicit_mappings 命中('某客户合同包' → 02-areas/合同档案/);跳过 Step B-D 常规判断"
+    }
+  ]
+}
+```
+
+**说明**:每个 item 的 `src_abs` / `target_bucket` / `target_subdir` / `target_filename` / `frontmatter` / `ai_reason` 必填(P0-2 路径边界校验 + v0.2.2 C-1 schema 必填集);`target_project` 仅在 `target_bucket = 01-projects` 时必填,其他 bucket(02-areas / 03-resources / 04-archives)允许为 null。`frontmatter.project` 在非 projects 类落地时应为 null。
+
+**v0.3 起**:plan 顶层可加 `"plan_schema_version": "v0.3"`,此时每个 item 必填 `tier`(`canonical / normal / working / versions / assets`),`tier = versions` 时另必填 `family_key`(不可含 Windows 非法字符)。无 `plan_schema_version` 的 v0.2 旧 plan 完全兼容,缺 `tier` 自动按 `normal` 处理。schema 完整字段见 [CLAUDE.md §6.3](../CLAUDE.md) + [docs/v0.2-plan.md §5.3 步骤 2.3](../docs/v0.2-plan.md);tier 判定协议见 [CLAUDE.md §6.2 Step E](../CLAUDE.md)。
+
 ### 工作流(v0.2 G14-G18 沿用 v0.1,target 路径由 plan 外部给定)
 
 | 步骤 | 实现 | 报错停于此步? |
@@ -291,7 +363,8 @@ baseline **不做**:语义级清洗 / 字段抽取 / 表头语义识别 / 跨 3+
 
 ```bash
 .venv\Scripts\python.exe scripts/smoke_test.py
-# → 4 个核心 assert(install 调用参数 / scan-only / 路径边界拒绝 malformed / 关键依赖 import)
+# → 17 个核心 assert(install 调用参数 / scan-only / plan schema 三层校验 /
+#   失败降级 stub / tier 路由 / search --deep / recipe 接口 等)
 ```
 
 详见文件顶部注释。
