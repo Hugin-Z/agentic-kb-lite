@@ -4,6 +4,12 @@
 > 核心判断:在个人/团队语料规模下,grep + 推理循环在成本、透明度、维护性上优于向量数据库 + Embedding + Rerank 的重型 RAG 栈。
 > English: [README.en.md](./README.en.md) · License: [MIT](./LICENSE)
 
+## 适合谁
+
+- 你有一堆工作素材(方案/标书/纪要/调研/截图/录屏),想问"我以前是怎么做的/我们当时为什么这么决定"
+- 你不想搭向量数据库 + Embedding + Rerank 的重型 RAG 栈
+- 你已经在用 Claude Code / Codex 等 AI 编程助手,愿意让 AI 直接读你的素材文件
+
 ## 一次检索长什么样
 
 (流程示意,非真实 log)
@@ -21,16 +27,55 @@ AI 编程助手(读本仓库 CLAUDE.md 契约后):
 
 多轮迭代由 LLM 自主决策(扩词/收窄/换角度),3 轮硬上限、工具调用累计 ≤ 12 次。正文检索失败时按 4 级降级:正文 .md → 拆词模糊 → vision 转写文件 → stub 元数据,每级失败明确告知。
 
-## 适合谁
+## 一次入库长什么样
 
-- 你有一堆工作素材(方案/标书/纪要/调研/截图/录屏),想问"我以前是怎么做的/我们当时为什么这么决定"
-- 你不想搭向量数据库 + Embedding + Rerank 的重型 RAG 栈
-- 你已经在用 Claude Code / Codex 等 AI 编程助手,愿意让 AI 直接读你的素材文件
+(流程示意,非真实 log)
 
-## 怎么工作
+```text
+你:把 D:\工作目录\智慧城市可视化平台 入库
 
-- **检索**:ripgrep 全文扫描 + LLM 多轮 agent loop,不做向量化、不做切分、不做侵入式重组
-- **入库**:AI 语义路由 —— `scan-only` 扫源目录 → AI 产出 routing_plan.json → `execute-plan` 落地;重跑自动增量跳过
+AI:python scripts/ingest.py scan-only <src>     → 扫出文件清单
+    读 CLAUDE.md 路由协议,逐个判断落位,产出 routing_plan.json:
+
+      总体方案.docx      → 01-projects/智慧城市可视化平台/01-方案/
+      需求调研纪要.md    → 01-projects/智慧城市可视化平台/04-调研/
+      标准/GBT_xxx.pdf   → 03-resources/国标行标/     ← 脱钩:国标不属于任何单个项目
+      已交付/2023老项目/ → 04-archives/               ← 默认不参与检索
+
+你:看一眼 plan,确认(或在 path_map.yaml 加一条 explicit_mappings 兜底)
+
+AI:python scripts/ingest.py execute-plan <plan>  → 落地 + 注入 frontmatter
+```
+
+## 为什么入库这一步是关键
+
+本项目不做向量化,检索靠 ripgrep 字面匹配 —— 而字面匹配本身没有语义。**语义是在入库时由 AI 判断一次,固化成两样东西**:
+
+- **目录位置**:文件放在哪,本身就是它的分类。这让检索可以先按 scope 收窄(只搜在做的项目 / 只搜参考资料 / 全库盘点),而不是在全量语料里撞运气
+- **frontmatter**:入库时注入 `type / date / project / tags` 等结构化字段,让"2026 Q1 的方案"这类条件可以字面命中
+
+代价是入库时要花一次 AI 判断,收益是此后每次检索都不需要 embedding 服务、不需要重建索引、结果可解释到具体文件路径。**换句话说:结构承担了向量库的职责。**
+
+判断由 AI 做但决定权在你 —— `scan-only` 与 `execute-plan` 分两步,中间的 routing_plan.json 是可读可改的纯文本。判断不理想时在 path_map.yaml 的 `explicit_mappings` 加一条用户偏好兜底,而不是去调提示词。
+
+物理落位细节(PARA 四层完整定义、tier 分层、`.shelved/` 排除规则)见 [docs/structure.md](docs/structure.md);routing_plan.json 完整 schema 见 [scripts/README.md](scripts/README.md)。
+
+## 逻辑住在文本契约里,不在 Python 里
+
+`scripts/` 下的脚本是刻意做薄的:`search.py` 是 ripgrep 的包装,`ingest.py` 负责格式转换和落盘。**真正的判断逻辑 —— PARA 路由协议、检索行为识别、4 级降级 —— 写在 [CLAUDE.md](CLAUDE.md) 里,由你正在用的 AI 编程助手读取并执行。**
+
+这么切有三个后果:
+
+- **不需要另调模型**。推理发生在你已经在跑的助手里,所以本仓库代码层面真的不调任何外部 API(边界见下方隐私说明)
+- **换助手就能用**。Claude Code / Codex 语义等价,因为契约是纯文本而不是绑定某家 API 的代码
+- **策略可读可改**。不满意降级行为就改 CLAUDE.md 的一段话,不用改代码、不用理解调用栈
+
+代价是行为依赖助手的指令遵循能力,所以 [corpus/.fixtures/](corpus/.fixtures/) 下有可复现的回归场景来锁住它。
+
+## 检索之外还有什么
+
+- **scope × behavior 双轴**:**scope** 决定去哪儿找,由 PARA 结构给出(只搜在做的项目 / 只搜参考资料 / 全库盘点);**behavior** 决定怎么整合答案,按提问类型分岔(单点定位 / 盘点 / 决策溯源 / 模糊探索)。两轴由助手读契约后各自判定、正交组合,**你不会被问任何选择题**
+- **tier 分层**:材料按 tier 分成主知识与过程稿 / 旧版本 / 原始素材,后三类落到 `.shelved/` 并默认排除出检索 —— 解决"旧材料不想删、但不该污染日常检索"的问题;追溯时加 `--deep` 一次性捞回。细节见 [docs/structure.md](docs/structure.md)
 - **多模态**:图为主 PPT / 扫描 PDF / 视频由 AI 编程助手内置 vision 能力转写(ffmpeg 抽帧 / poppler 渲染),docx/pptx/pdf 经 markitdown 轻量转 .md
 - **可评估**:10 个 agent loop fixture + 7 个多模态 fixture,可复现回归
 
